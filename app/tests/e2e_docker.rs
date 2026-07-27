@@ -213,6 +213,71 @@ fn e2e_uc_update_check() {
         .stdout(predicates::str::contains("UpToDate"));
 }
 
+// ---- ucBrowserControlPlane: boot `yd serve` and deploy over HTTP --------------
+#[test]
+#[ignore = "requires Docker"]
+fn e2e_serve_deploy_over_http() {
+    require_docker!("serve_deploy");
+    let root = tempfile::tempdir().unwrap();
+    let name = "yde2e-serve-web";
+    std::fs::create_dir(root.path().join("webapp")).unwrap();
+    std::fs::write(
+        root.path().join("webapp").join("docker-compose.yml"),
+        format!("services:\n  web:\n    image: nginx:1.27-alpine\n    container_name: {name}\n    healthcheck:\n      test: [\"CMD\", \"wget\", \"-qO-\", \"http://localhost/\"]\n      interval: 2s\n      timeout: 2s\n      retries: 4\n"),
+    )
+    .unwrap();
+
+    let port: u16 = 8791;
+    let child = std::process::Command::new(env!("CARGO_BIN_EXE_yd"))
+        .args(["serve", "--root", root.path().to_str().unwrap(), "--port", &port.to_string()])
+        .spawn()
+        .expect("spawn yd serve");
+    // kill the server + remove the container on drop, even if an assert fails.
+    struct Guard(std::process::Child, String);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = std::process::Command::new("docker").args(["rm", "-f", &self.1]).output();
+        }
+    }
+    let _guard = Guard(child, name.to_string());
+
+    let base = format!("http://127.0.0.1:{port}");
+    let agent = ureq::AgentBuilder::new()
+        .timeout_read(std::time::Duration::from_secs(180))
+        .build();
+
+    // wait for the server to accept connections
+    let mut ready = false;
+    for _ in 0..40 {
+        if agent.get(&format!("{base}/api/stacks")).call().is_ok() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    assert!(ready, "yd serve did not come up on {base}");
+
+    // deploy the stack over HTTP (with the anti-CSRF headers the UI sends)
+    let resp = agent
+        .post(&format!("{base}/api/deploy"))
+        .set("Content-Type", "application/json")
+        .set("Origin", &base)
+        .send_bytes(b"{\"compose\":\"webapp/docker-compose.yml\"}")
+        .expect("POST /api/deploy");
+    let body = resp.into_string().unwrap();
+    assert!(body.contains("\"ok\":true"), "deploy ok over HTTP: {body}");
+    assert!(body.contains("Deployed"), "reported Deployed: {body}");
+
+    // the container is actually running healthy
+    let health = raw_docker(&["inspect", name, "--format", "{{.State.Health.Status}}"]);
+    assert_eq!(health, "healthy", "container healthy after HTTP deploy");
+
+    let _ = std::process::Command::new("docker")
+        .args(["compose", "-f", root.path().join("webapp").join("docker-compose.yml").to_str().unwrap(), "down"])
+        .output();
+}
+
 // ---- ucBackupVerifiedRestore (no Docker needed) -------------------------------
 #[test]
 #[ignore = "part of the e2e suite"]
