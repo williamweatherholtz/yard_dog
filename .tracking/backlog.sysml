@@ -17,6 +17,7 @@ package YardDogBacklog {
         part deployRunsGuardrailsDoDR1 : TestResult { :>> id = "546790d3-bcce-42b5-934d-a02ee4ae5e23"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "323d525"; :>> judgedAt = "2026-07-27"; :>> judgedBy = "ai"; }
         action preserveComposeFormat;
         verification preserveComposeFormatDoD : Test { :>> id = "59817f25-9837-4ebc-9c89-134f5bd8db98"; :>> method = VerificationMethod::test; :>> procedureText = "set_service_image edits the image in place preserving comments/formatting (no full serde_yaml round-trip); unit test asserts a comment survives an image change."; }
+        part preserveComposeFormatDoDR1 : TestResult { :>> id = "8e43e14c-3998-4737-ab6a-f54e4ed836b1"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "7af4b16"; :>> judgedAt = "2026-07-27"; :>> judgedBy = "ai"; }
         action deployUpgradeFsm;
         verification deployUpgradeFsmDoD : Test { :>> id = "cb4e5066-4ecc-4170-9c89-134f5c96f150"; :>> method = VerificationMethod::test; :>> procedureText = "Model the deploy/upgrade lifecycle as an explicit FSM (states + guarded transitions, invalid transitions unrepresentable) shared by safe_deploy and safe_upgrade; unit-tested transition table."; }
         part deployUpgradeFsmDoDR1 : TestResult { :>> id = "1ce27fb1-4a26-41ad-934d-a02ee629d1fb"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "323d525"; :>> judgedAt = "2026-07-27"; :>> judgedBy = "ai"; }

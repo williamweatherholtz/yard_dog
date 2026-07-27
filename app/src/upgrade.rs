@@ -19,25 +19,89 @@ pub enum UpgradeOutcome {
     BackupFailed(String),
 }
 
-/// Return `yaml` with a single service's `image` rewritten, preserving the rest.
-/// Pure over the text, so it also serves as a preview of what an upgrade will
-/// deploy (e.g. for guardrail evaluation) without touching disk.
+/// Return `yaml` with a single service's `image` rewritten, preserving the rest
+/// of the file byte-for-byte (comments, key order, quoting). A surgical, line-
+/// oriented edit rather than a serde round-trip — the compose lives on disk and
+/// is git-versioned, so noisy reformatting and lost comments are unacceptable.
+/// Being pure over the text, it also previews what an upgrade will deploy (e.g.
+/// for guardrail evaluation) without touching disk.
 pub fn image_changed_yaml(yaml: &str, service: &str, image: &str) -> io::Result<String> {
-    let mut doc: serde_yaml::Value = serde_yaml::from_str(yaml)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-    if let Some(svc) = doc
-        .as_mapping_mut()
-        .and_then(|m| m.get_mut("services"))
-        .and_then(|v| v.as_mapping_mut())
-        .and_then(|s| s.get_mut(service))
-        .and_then(|v| v.as_mapping_mut())
-    {
-        svc.insert(
-            serde_yaml::Value::from("image"),
-            serde_yaml::Value::from(image),
-        );
+    let indent_of = |l: &str| l.len() - l.trim_start().len();
+    let mut out: Vec<String> = Vec::new();
+    let mut services_indent: Option<usize> = None;
+    let mut target_indent: Option<usize> = None;
+    let mut replaced = false;
+
+    for line in yaml.lines() {
+        let trimmed = line.trim_start();
+        let indent = indent_of(line);
+        let structural = !trimmed.is_empty() && !trimmed.starts_with('#');
+
+        // Enter the top-level `services:` mapping.
+        if services_indent.is_none() {
+            if structural && trimmed == "services:" {
+                services_indent = Some(indent);
+            }
+            out.push(line.to_string());
+            continue;
+        }
+        let svc_indent = services_indent.unwrap();
+
+        // A structural line at or above `services:` indent ends the block.
+        if structural && indent <= svc_indent {
+            services_indent = None;
+            target_indent = None;
+            out.push(line.to_string());
+            continue;
+        }
+
+        match target_indent {
+            // Looking for the target service's header.
+            None => {
+                if structural
+                    && indent > svc_indent
+                    && trimmed
+                        .strip_suffix(':')
+                        .map(|h| h.trim_matches('"').trim_matches('\''))
+                        == Some(service)
+                {
+                    target_indent = Some(indent);
+                }
+                out.push(line.to_string());
+            }
+            // Inside the target service block.
+            Some(t_indent) => {
+                if structural && indent <= t_indent {
+                    // Left the target service; re-check this same line as a header.
+                    target_indent = None;
+                    if indent > svc_indent && trimmed
+                        .strip_suffix(':')
+                        .map(|h| h.trim_matches('"').trim_matches('\''))
+                        == Some(service) {
+                        target_indent = Some(indent);
+                    }
+                    out.push(line.to_string());
+                } else if !replaced && trimmed.starts_with("image:") {
+                    let after = &trimmed["image:".len()..];
+                    let comment = after.find('#').map(|i| after[i..].to_string());
+                    let indent_str = &line[..indent];
+                    out.push(match comment {
+                        Some(c) => format!("{indent_str}image: {image}  {c}"),
+                        None => format!("{indent_str}image: {image}"),
+                    });
+                    replaced = true;
+                } else {
+                    out.push(line.to_string());
+                }
+            }
+        }
     }
-    serde_yaml::to_string(&doc).map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+
+    let mut result = out.join("\n");
+    if yaml.ends_with('\n') {
+        result.push('\n');
+    }
+    Ok(result)
 }
 
 /// Rewrite a single service's `image` in the compose file, preserving the rest.
@@ -128,6 +192,27 @@ mod tests {
     fn app_image(compose: &Path) -> String {
         let yaml = std::fs::read_to_string(compose).unwrap();
         parse_service_images(&yaml).get("app").cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn image_change_preserves_comments_and_formatting() {
+        let yaml = "# my stack\nservices:\n  app:\n    image: nginx:1.27  # pinned\n    restart: unless-stopped\n  db:\n    image: postgres:16\n";
+        let out = image_changed_yaml(yaml, "app", "nginx:1.29").unwrap();
+        assert!(out.contains("# my stack"), "top-of-file comment preserved:\n{out}");
+        assert!(out.contains("image: nginx:1.29"), "image updated:\n{out}");
+        assert!(out.contains("# pinned"), "inline comment preserved:\n{out}");
+        assert!(out.contains("restart: unless-stopped"), "sibling key preserved");
+        assert!(out.contains("image: postgres:16"), "other service untouched");
+        assert!(!out.contains("nginx:1.27"), "old image gone");
+    }
+
+    #[test]
+    fn image_change_handles_a_quoted_service_name() {
+        // A quoted service key is legal YAML; the edit must still find it (the
+        // old serde round-trip did), else the upgrade silently no-ops.
+        let yaml = "services:\n  \"app\":\n    image: nginx:1.27\n";
+        let out = image_changed_yaml(yaml, "app", "nginx:1.29").unwrap();
+        assert!(out.contains("image: nginx:1.29"), "quoted-key service updated:\n{out}");
     }
 
     #[test]
