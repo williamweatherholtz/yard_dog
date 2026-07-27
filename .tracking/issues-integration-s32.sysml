@@ -19,5 +19,5 @@ package YardDogIntegrationIssuesS32 {
         :>> severity = Severity::High;
     }
 
-    #Resolves dependency from fixDeployRepoWiring to issDeployRepoWiring;
+    #Resolves dependency from deployVersionsStackDir to issDeployRepoWiring;
 }
