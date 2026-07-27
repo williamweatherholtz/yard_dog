@@ -397,3 +397,13 @@ fn self_update_prints_current_version() {
     let out = String::from_utf8_lossy(&a.get_output().stdout).to_string();
     assert!(out.contains("0.1.0"), "got:\n{out}");
 }
+
+#[test]
+fn drift_runs_and_lists_declared_services() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("c.yml");
+    std::fs::write(&f, "services:\n  app:\n    image: nginx:1.27\n").unwrap();
+    let a = Command::cargo_bin("yd").unwrap().arg("drift").arg(f.to_str().unwrap()).assert().success();
+    let out = String::from_utf8_lossy(&a.get_output().stdout).to_string();
+    assert!(out.contains("app"), "got:\n{out}");
+}

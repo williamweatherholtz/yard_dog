@@ -37,6 +37,11 @@ enum Command {
         /// Path to the docker-compose file.
         file: String,
     },
+    /// Report drift between the declared compose and the running stack.
+    Drift {
+        /// Path to the docker-compose file.
+        file: String,
+    },
     /// Apply remediations for detected path issues (dry-run unless --yes).
     Fix {
         /// Path to the docker-compose file.
@@ -179,6 +184,7 @@ fn main() {
         Command::Check { file } => run_check(&file),
         Command::Classify { file } => run_classify(&file),
         Command::Updates { file } => run_updates(&file),
+        Command::Drift { file } => run_drift(&file),
         Command::Fix { file, yes } => run_fix(&file, yes),
         Command::Backup {
             file,
@@ -254,6 +260,32 @@ fn run_updates(file: &str) -> Result<(), String> {
             item.status,
             item.action.as_str()
         );
+    }
+    Ok(())
+}
+
+fn run_drift(file: &str) -> Result<(), String> {
+    // Placeholder: running-state introspection via docker is the next increment.
+    struct NoRunning;
+    impl yarddog::drift::RunningState for NoRunning {
+        fn running_images(&self) -> Option<std::collections::HashMap<String, String>> {
+            None
+        }
+    }
+    let yaml = std::fs::read_to_string(file).map_err(|e| format!("reading {file}: {e}"))?;
+    match yarddog::drift::drift_report(&yaml, &NoRunning) {
+        Some(items) if items.is_empty() => println!("no drift"),
+        Some(items) => {
+            for i in &items {
+                println!("{}: {:?}", i.service, i.kind);
+            }
+        }
+        None => {
+            println!("running state unavailable — drift check needs docker (planned). Declared services:");
+            for (svc, img) in yarddog::compose::parse_service_images(&yaml) {
+                println!("  {svc}: {img}");
+            }
+        }
     }
     Ok(())
 }
