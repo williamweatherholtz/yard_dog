@@ -118,6 +118,17 @@ Project-level delivery choices, authored as **accepted Decisions in `.tracking/`
   direction-changing ambiguity, or an unresolvable failure). The human supervises asynchronously via
   `keel orient` / `keel coverage`.
 
+- **Correctness is king — per-sprint critique battery** (`decCritiqueBattery`). The priority order is
+  **deployment < velocity < acceleration < direction (= correctness)**: we build *sound* software, not
+  just shipped software. At each sprint close/commit, run a critique battery (as practical): (1) **docs**
+  (README reflects new/changed commands + behavior; doc-sync), (2) **human-factors** (does the operator
+  get the right indications/affordances — e.g. warn when a healthcheck is desired but absent), (3)
+  **design-pattern & state-machine** (prefer explicit FSMs where processing has states/transitions;
+  make invalid transitions unrepresentable), (4) **code-concision** antagonistic (`/simplify`), (5)
+  **correctness** antagonistic (`/code-review` + element-critique correctness lens). File **all findings
+  as severity-tagged Issues** (each with a `#Resolves` resolver). **Before the next sprint kicks off,
+  refinement prioritizes those Issues — correctness/high first, ahead of new feature work.**
+
 **Host + build:** Windows 11 / PowerShell + Git-Bash; Rust (cargo) + Docker 29.x. The product crate
 is `app/` (Rust, Bollard); host-FS/Docker access is trait-abstracted so unit tests run on Windows
 against fixtures. Run `keel` from the repo root; run `cargo` from `app/`.
