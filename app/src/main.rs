@@ -411,15 +411,35 @@ fn run_backup(file: &str, plan: bool, run: bool, dest: Option<&str>) -> Result<(
     Ok(())
 }
 
+/// Print guardrail findings so the operator is told, before anything is applied,
+/// what the FSM will warn or block on — e.g. a service with no healthcheck (which
+/// also makes the health-gate a no-op), a floating tag, or a plaintext secret.
+fn announce_guardrails(compose: &std::path::Path) {
+    let Ok(yaml) = std::fs::read_to_string(compose) else {
+        return;
+    };
+    for f in yarddog::guardrails::run_guardrails(&yaml) {
+        let tag = match f.severity {
+            yarddog::guardrails::Severity::Block => "BLOCK",
+            yarddog::guardrails::Severity::Warn => "warn",
+        };
+        eprintln!("guardrail [{tag}] {}: {} ({})", f.service, f.message, f.rule);
+    }
+}
+
 fn run_deploy(file: &str, yes: bool) -> Result<(), String> {
     let compose = std::path::Path::new(file);
     let stack_dir = compose.parent().unwrap_or_else(|| std::path::Path::new("."));
     let history = stack_dir.join(".yd-history");
+    announce_guardrails(compose);
     let outcome = yarddog::deploy::safe_deploy(compose, &history, yes, &RealBackupHook, &RealDeployer)
         .map_err(|e| format!("deploy failed: {e}"))?;
     println!("deploy: {outcome:?}");
     if matches!(outcome, yarddog::deploy::DeployOutcome::BackupFailed(_)) {
         std::process::exit(2);
+    }
+    if matches!(outcome, yarddog::deploy::DeployOutcome::Blocked(_)) {
+        std::process::exit(3);
     }
     Ok(())
 }
@@ -432,6 +452,7 @@ fn run_upgrade(
     yes: bool,
 ) -> Result<(), String> {
     // --yes proceeds and auto-accepts on a passing healthcheck.
+    announce_guardrails(std::path::Path::new(file));
     let outcome = yarddog::upgrade::safe_upgrade(
         std::path::Path::new(file),
         std::path::Path::new(repo),
@@ -444,15 +465,20 @@ fn run_upgrade(
     )
     .map_err(|e| format!("upgrade failed: {e}"))?;
     println!("upgrade: {outcome:?}");
+    if matches!(outcome, yarddog::upgrade::UpgradeOutcome::Blocked(_)) {
+        std::process::exit(3);
+    }
     Ok(())
 }
 
-/// Real deployer: `docker compose up -d` in the stack directory.
+/// Real deployer: `docker compose up -d --wait` in the stack directory. `--wait`
+/// blocks until containers are HEALTHY (or the wait times out), so a non-zero
+/// exit — the health-gate failing — is surfaced as `Err` and drives a regress.
 struct RealDeployer;
 impl yarddog::deploy::Deployer for RealDeployer {
     fn deploy(&self, stack_dir: &std::path::Path) -> std::io::Result<()> {
         let status = std::process::Command::new("docker")
-            .args(["compose", "up", "-d"])
+            .args(yarddog::flow::compose_up_args())
             .current_dir(stack_dir)
             .status()?;
         if status.success() {
@@ -460,7 +486,7 @@ impl yarddog::deploy::Deployer for RealDeployer {
         } else {
             Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                "docker compose up failed",
+                "docker compose up --wait failed (unhealthy or timed out)",
             ))
         }
     }

@@ -60,6 +60,11 @@ pub fn init(dir: &Path) -> io::Result<()> {
 /// Commit the current config as a snapshot; returns the commit sha.
 pub fn snapshot(dir: &Path, message: &str) -> io::Result<String> {
     git_ok(dir, &["add", "-A"])?;
+    // Nothing staged => a deploy with no config change; committing would fail,
+    // so treat it as a no-op and return the current HEAD.
+    if git_ok(dir, &["status", "--porcelain"])?.trim().is_empty() {
+        return Ok(git_ok(dir, &["rev-parse", "HEAD"])?.trim().to_string());
+    }
     git_ok(dir, &["commit", "-q", "-m", message])?;
     Ok(git_ok(dir, &["rev-parse", "HEAD"])?.trim().to_string())
 }
@@ -87,6 +92,10 @@ pub fn restore(dir: &Path, sha: &str) -> io::Result<String> {
     // without moving HEAD, then commit the result as a new snapshot.
     git_ok(dir, &["checkout", sha, "--", "."])?;
     git_ok(dir, &["add", "-A"])?;
+    // Restoring to already-current content is a no-op; committing would fail.
+    if git_ok(dir, &["status", "--porcelain"])?.trim().is_empty() {
+        return Ok(git_ok(dir, &["rev-parse", "HEAD"])?.trim().to_string());
+    }
     let short = &sha[..sha.len().min(12)];
     git_ok(dir, &["commit", "-q", "-m", &format!("restore to {short}")])?;
     Ok(git_ok(dir, &["rev-parse", "HEAD"])?.trim().to_string())
@@ -129,6 +138,18 @@ mod tests {
         assert!(tracked.contains("docker-compose.yml"));
         assert!(!tracked.contains(".env"), "secrets must not be tracked");
         assert!(!tracked.contains("x.sqlite"), "data must not be tracked");
+    }
+
+    #[test]
+    fn snapshot_with_no_changes_is_a_noop_returning_head() {
+        // A deploy without a config change must not fail at snapshot time.
+        let dir = tempfile::tempdir().unwrap();
+        init(dir.path()).unwrap();
+        std::fs::write(dir.path().join("docker-compose.yml"), "v1").unwrap();
+        let s1 = snapshot(dir.path(), "first").unwrap();
+        let s2 = snapshot(dir.path(), "again").unwrap();
+        assert_eq!(s1, s2, "no change => same HEAD, no error, no new commit");
+        assert_eq!(history(dir.path()).unwrap().len(), 1);
     }
 
     #[test]

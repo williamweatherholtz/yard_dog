@@ -4,7 +4,7 @@
 //! primitives; the Deployer/BackupHook traits keep it testable without Docker.
 
 use crate::deploy::{BackupHook, Deployer};
-use crate::gitver;
+use crate::flow::{self, Change, Outcome};
 use std::io;
 use std::path::Path;
 
@@ -13,6 +13,7 @@ pub enum UpgradeOutcome {
     Upgraded,
     Regressed(String),
     Skipped,
+    Blocked(String),
     BackupFailed(String),
 }
 
@@ -38,52 +39,43 @@ pub fn set_service_image(compose_path: &Path, service: &str, image: &str) -> io:
     std::fs::write(compose_path, out)
 }
 
-/// Orchestrate a health-gated upgrade with regress-or-accept.
+/// Orchestrate a health-gated upgrade with regress-or-accept. This is a thin
+/// adapter over the shared lifecycle FSM (`flow::run`) — the only upgrade-specific
+/// input is the target image; backup, snapshot, health-gate and regress are
+/// identical to a plain deploy (see issDeployDup).
 #[allow(clippy::too_many_arguments)]
 pub fn safe_upgrade(
-    _compose_path: &Path,
-    _repo: &Path,
-    _service: &str,
-    _image: &str,
-    _confirmed: bool,
-    _accept: bool,
-    _backup: &dyn BackupHook,
-    _deployer: &dyn Deployer,
+    compose_path: &Path,
+    repo: &Path,
+    service: &str,
+    image: &str,
+    confirmed: bool,
+    accept: bool,
+    backup: &dyn BackupHook,
+    deployer: &dyn Deployer,
 ) -> io::Result<UpgradeOutcome> {
-    if !_confirmed {
-        return Ok(UpgradeOutcome::Skipped);
-    }
-    let stack_dir = _compose_path.parent().unwrap_or_else(|| Path::new("."));
-
-    if let Err(e) = _backup.pre_change_backup(stack_dir) {
-        return Ok(UpgradeOutcome::BackupFailed(e.to_string()));
-    }
-
-    // Remember the last-good commit, apply the new image, snapshot it.
-    let prior = gitver::history(_repo)
-        .ok()
-        .and_then(|h| h.first().map(|(sha, _)| sha.clone()));
-    set_service_image(_compose_path, _service, _image)?;
-    gitver::snapshot(_repo, &format!("upgrade {_service} -> {_image}"))?;
-
-    let regress = |reason: &str| -> io::Result<UpgradeOutcome> {
-        if let Some(good) = &prior {
-            gitver::restore(_repo, good)?;
-        }
-        Ok(UpgradeOutcome::Regressed(reason.to_string()))
+    let change = Change {
+        compose_path,
+        repo,
+        image_change: Some((service, image)),
+        confirmed,
+        accept,
     };
-
-    match _deployer.deploy(stack_dir) {
-        Ok(()) if _accept => Ok(UpgradeOutcome::Upgraded),
-        Ok(()) => regress("healthy but not accepted"),
-        Err(_) => regress("healthcheck failed"),
-    }
+    let mut trace = Vec::new();
+    Ok(match flow::run(&change, backup, deployer, &mut trace)? {
+        Outcome::Upgraded | Outcome::Deployed => UpgradeOutcome::Upgraded,
+        Outcome::Regressed(r) => UpgradeOutcome::Regressed(r),
+        Outcome::Skipped => UpgradeOutcome::Skipped,
+        Outcome::Blocked(r) => UpgradeOutcome::Blocked(r),
+        Outcome::BackupFailed(r) => UpgradeOutcome::BackupFailed(r),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::compose::parse_service_images;
+    use crate::gitver;
 
     struct OkDeployer;
     impl Deployer for OkDeployer {

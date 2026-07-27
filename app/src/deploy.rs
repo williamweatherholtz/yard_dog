@@ -3,7 +3,7 @@
 //! versioning is delegated to `gitver` (decGitVersioning); Deployer and
 //! BackupHook are traits so the orchestration is testable without Docker.
 
-use crate::gitver;
+use crate::flow::{self, Change, Outcome};
 use std::io;
 use std::path::Path;
 
@@ -23,12 +23,15 @@ pub enum DeployOutcome {
     Deployed,
     RolledBack,
     Skipped,
+    Blocked(String),
     BackupFailed(String),
 }
 
-/// Deploy safely: only when `confirmed`; back up first (abort if that fails),
-/// snapshot the config in the git repo `repo_dir`, deploy, and on failure
-/// restore the prior last-good commit (as a new commit).
+/// Deploy safely: only when `confirmed`; run guardrails, back up first (abort if
+/// that fails), snapshot the config in the git repo `repo_dir`, health-gate the
+/// deploy, and on failure restore the prior last-good commit. A thin adapter
+/// over the shared lifecycle FSM (`flow::run`) — a deploy is an upgrade with no
+/// image change, always accepted when healthy (see issDeployDup).
 pub fn safe_deploy(
     compose_path: &Path,
     repo_dir: &Path,
@@ -36,36 +39,27 @@ pub fn safe_deploy(
     backup: &dyn BackupHook,
     deployer: &dyn Deployer,
 ) -> io::Result<DeployOutcome> {
-    if !confirmed {
-        return Ok(DeployOutcome::Skipped);
-    }
-    let stack_dir = compose_path.parent().unwrap_or_else(|| Path::new("."));
-
-    // Recovery point first — abort if it fails.
-    if let Err(e) = backup.pre_change_backup(stack_dir) {
-        return Ok(DeployOutcome::BackupFailed(e.to_string()));
-    }
-
-    // Prior last-good = current HEAD; then snapshot the config being deployed.
-    let prior = gitver::history(repo_dir)
-        .ok()
-        .and_then(|h| h.first().map(|(sha, _)| sha.clone()));
-    let _snapshot = gitver::snapshot(repo_dir, "yd deploy snapshot")?;
-
-    match deployer.deploy(stack_dir) {
-        Ok(()) => Ok(DeployOutcome::Deployed),
-        Err(_) => {
-            if let Some(good) = prior {
-                gitver::restore(repo_dir, &good)?;
-            }
-            Ok(DeployOutcome::RolledBack)
-        }
-    }
+    let change = Change {
+        compose_path,
+        repo: repo_dir,
+        image_change: None,
+        confirmed,
+        accept: true,
+    };
+    let mut trace = Vec::new();
+    Ok(match flow::run(&change, backup, deployer, &mut trace)? {
+        Outcome::Deployed | Outcome::Upgraded => DeployOutcome::Deployed,
+        Outcome::Regressed(_) => DeployOutcome::RolledBack,
+        Outcome::Skipped => DeployOutcome::Skipped,
+        Outcome::Blocked(r) => DeployOutcome::Blocked(r),
+        Outcome::BackupFailed(r) => DeployOutcome::BackupFailed(r),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gitver;
     use std::cell::RefCell;
 
     struct OkDeployer;
