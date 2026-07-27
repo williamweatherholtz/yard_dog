@@ -28,9 +28,9 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             asset: yd-aarch64-macos
-          - os: macos-13
-            target: x86_64-apple-darwin
-            asset: yd-x86_64-macos
+          # macOS Intel (x86_64-apple-darwin / macos-13) omitted — GitHub's
+          # Intel-mac runners queue unreliably and block the release. Apple
+          # Silicon is covered above; re-add when the runner situation improves.
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
