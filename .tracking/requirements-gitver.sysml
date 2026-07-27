@@ -22,6 +22,9 @@ package YardDogGitVerReqs {
     }
 
     satisfy needVersionedCompose by srGitVersioning;
+    // gitver's opinionated .gitignore excludes secrets + data (tested in
+    // gitSnapshotHistory), realizing the secrets/data-safety guardrail too.
+    satisfy needSecretDataSafety by srGitVersioning;
 
     #Verify dependency from gitInitDoD to srGitVersioning;
     #Verify dependency from gitSnapshotHistoryDoD to srGitVersioning;
