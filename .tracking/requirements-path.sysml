@@ -55,4 +55,11 @@ package YardDogRequirements {
     satisfy needPathExistence by srHostPathExistence;
     satisfy needGuidedRemediation by srGuidedRemediation;
     satisfy needPermissionAwareness by srGuidedRemediation;
+
+    // verify edges: the Sprint 1 DoD tests (reproducible method=test, passing)
+    // are the objective evidence for each SR. Cross-package bare name refs —
+    // generic .tracking validation (per sysmlv2-syntax-notes).
+    #Verify dependency from classifyMountTypeDoD to srClassifyMounts;
+    #Verify dependency from checkHostPathExistenceDoD to srHostPathExistence;
+    #Verify dependency from suggestRemediationDoD to srGuidedRemediation;
 }
