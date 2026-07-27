@@ -148,6 +148,14 @@ enum Command {
     },
     /// Check whether a newer Yard Dog release is available.
     SelfUpdate,
+    /// Show or transition a stack's lifecycle state (draft/active/deprecated/archived).
+    Lifecycle {
+        #[arg(long)]
+        repo: String,
+        /// activate | deprecate | archive | restore (omit to just show the current state).
+        #[arg(long)]
+        event: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -226,6 +234,7 @@ fn main() {
         Command::Version { action } => run_version(action),
         Command::Pin { action } => run_pin(action),
         Command::SelfUpdate => run_self_update(),
+        Command::Lifecycle { repo, event } => run_lifecycle(&repo, event.as_deref()),
     };
     if let Err(e) = result {
         eprintln!("yd: {e}");
@@ -604,6 +613,21 @@ fn run_self_update() -> Result<(), String> {
     let current = env!("CARGO_PKG_VERSION");
     let status = yarddog::selfupdate::check(current, &NoReleaseInfo);
     println!("yd {current}: {status:?}");
+    Ok(())
+}
+
+fn run_lifecycle(repo: &str, event: Option<&str>) -> Result<(), String> {
+    use yarddog::lifecycle::{read_state, transition, LifecycleEvent};
+    let dir = std::path::Path::new(repo);
+    let state = match event {
+        None => read_state(dir),
+        Some(e) => {
+            let ev = LifecycleEvent::parse(e)
+                .ok_or_else(|| format!("unknown event '{e}' (activate|deprecate|archive|restore)"))?;
+            transition(dir, ev).map_err(|err| format!("lifecycle transition rejected: {err}"))?
+        }
+    };
+    println!("lifecycle: {}", state.as_str());
     Ok(())
 }
 

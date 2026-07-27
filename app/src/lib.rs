@@ -14,6 +14,7 @@ pub mod flow;
 pub mod gitver;
 pub mod guardrails;
 pub mod hostfs;
+pub mod lifecycle;
 pub mod mounttable;
 pub mod notify;
 pub mod ownership;

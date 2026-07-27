@@ -392,6 +392,24 @@ fn pin_add_then_list() {
 }
 
 #[test]
+fn lifecycle_shows_default_and_transitions() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().to_str().unwrap();
+    // default is draft
+    let a = Command::cargo_bin("yd").unwrap().args(["lifecycle", "--repo", repo]).assert().success();
+    let out = String::from_utf8_lossy(&a.get_output().stdout).to_string();
+    assert!(out.contains("draft"), "default draft; got:\n{out}");
+    // activate -> active
+    let b = Command::cargo_bin("yd").unwrap().args(["lifecycle", "--repo", repo, "--event", "activate"]).assert().success();
+    assert!(String::from_utf8_lossy(&b.get_output().stdout).contains("active"));
+    // an invalid transition (restore from active) fails
+    Command::cargo_bin("yd").unwrap().args(["lifecycle", "--repo", repo, "--event", "restore"]).assert().failure();
+    // state is unchanged after the rejected transition
+    let d = Command::cargo_bin("yd").unwrap().args(["lifecycle", "--repo", repo]).assert().success();
+    assert!(String::from_utf8_lossy(&d.get_output().stdout).contains("active"), "state preserved after reject");
+}
+
+#[test]
 fn self_update_prints_current_version() {
     let a = Command::cargo_bin("yd").unwrap().arg("self-update").assert().success();
     let out = String::from_utf8_lossy(&a.get_output().stdout).to_string();
