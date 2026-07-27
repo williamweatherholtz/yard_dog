@@ -29,6 +29,7 @@ package YardDogBacklog {
         part gitRestoreRemovesStrayDoDR1 : TestResult { :>> id = "07988f7b-2611-42fa-bfaf-f84c7e17f5de"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "3beab6e"; :>> judgedAt = "2026-07-27"; :>> judgedBy = "ai"; }
         action addReadme;
         verification addReadmeDoD : Test { :>> id = "8ebaa895-28e7-4b44-9c89-134f5edebc18"; :>> method = VerificationMethod::test; :>> procedureText = "A README documents the yd commands + the safety model (backup/verify/git-versioning/safe-deploy/upgrade/guardrails); doc-sync keeps it current on commit."; }
+        part addReadmeDoDR1 : TestResult { :>> id = "26838adc-63b7-4ffe-92ba-15990cd040b2"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "d07fc8d"; :>> judgedAt = "2026-07-27"; :>> judgedBy = "ai"; }
         action regressRedeploys;
         verification regressRedeploysDoD : Test { :>> id = "a266f7a6-4821-47ea-a980-91bc36d827ae"; :>> method = VerificationMethod::test; :>> procedureText = "On regress, the FSM re-deploys the restored last-good config (not only restoring the file) so the live stack actually returns to the good version; unit test asserts the deployer is invoked a second time with the restored config and a still-failing rollback is surfaced (RegressFailed) rather than silently leaving broken containers up."; }
         part regressRedeploysDoDR1 : TestResult { :>> id = "9e95ea19-fac7-4a5e-bfaf-f84c7f955712"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "3beab6e"; :>> judgedAt = "2026-07-27"; :>> judgedBy = "ai"; }
