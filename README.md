@@ -112,12 +112,17 @@ cd /srv/stacks      # the directory holding your compose stacks
 yd serve            # → http://127.0.0.1:8770  (loopback only)
 ```
 
-The dashboard lists every stack with its lifecycle and service count; opening one
-shows its services (with workload kind), guardrail findings, the READY/NOT-READY
-preflight verdict, and lifecycle controls — and lets you deploy, upgrade, back up,
-check drift/updates, transition lifecycle, or take the stack down. Every action
-runs through the same guarded CLI path (guardrails → backup → health-gate →
-rollback).
+The rail lists every stack with its lifecycle and an issue badge; opening one gives
+a tabbed detail view:
+- **Overview** — ranked issues (guardrails incl. the security lens), per-service
+  drift/update status chips, and actions (deploy, upgrade, back up, lifecycle, down).
+- **Compose** — an in-browser editor with **live** guardrail + preflight feedback as
+  you type; Save snapshots the config (git), Save & deploy runs the guarded path.
+- **History** — the git snapshot timeline with a unified **diff** viewer and one-click
+  **restore** of a past version.
+
+(Mounts, Permissions, Backups, and Logs tabs are on the roadmap.) Every action runs
+through the same guarded path (guardrails → backup → health-gate → rollback).
 
 **Security model (secure by default).** The server binds `127.0.0.1` only; it
 never listens on a non-loopback address. It rejects any request whose `Host`

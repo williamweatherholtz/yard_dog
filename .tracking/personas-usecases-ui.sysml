@@ -117,4 +117,44 @@ package YardDogUiPersonas {
         :>> mainSuccess = "From History, the operator picks a past snapshot, reviews its diff against current, and restores it — which snapshots the current state first, restores the chosen config, and (optionally) redeploys through the guarded health-gated path.";
         :>> extensions = "A restore that fails to redeploy healthy regresses like any other change; the chosen version is clearly labeled in the resulting history entry.";
     }
+
+    use case ucResourceStats : UseCase {
+        :>> id = "d90ef9d1-8678-45c9-a2bf-796010922e47";
+        :>> title = "See per-container resource and health at a glance";
+        :>> createdAt = "2026-07-27";
+        :>> createdBy = "wweatherholtz";
+        :>> description = "Riley wants a quick read on what each container is consuming and whether it is healthy.";
+        :>> mainSuccess = "A stack view shows per-container status, health, and live CPU/memory usage (docker stats), so the operator spots a runaway or unhealthy container without a terminal.";
+        :>> extensions = "Stats update periodically and stop when the view is closed; a stopped container is shown as such rather than as zero usage.";
+    }
+
+    use case ucImportWizard : UseCase {
+        :>> id = "49e87f69-fdea-466b-9f7b-29fac2f3c516";
+        :>> title = "Adopt existing compose stacks via a guided import";
+        :>> createdAt = "2026-07-27";
+        :>> createdBy = "wweatherholtz";
+        :>> description = "Riley points Yard Dog at an existing directory of compose stacks and onboards them.";
+        :>> mainSuccess = "An import/onboarding flow discovers compose stacks under a chosen root, shows each with an initial issues/preflight read, and adopts them (initialising versioning + a lifecycle state) so they become managed stacks.";
+        :>> extensions = "A directory with no compose files is reported clearly; adoption never mutates the stack's running state, only begins managing it.";
+    }
+
+    use case ucNotifications : UseCase {
+        :>> id = "ea7e06de-cd79-4cb4-9704-0b954dc98908";
+        :>> title = "Be alerted to problems and available updates";
+        :>> createdAt = "2026-07-27";
+        :>> createdBy = "wweatherholtz";
+        :>> description = "Riley wants to be told when something needs attention rather than having to go look.";
+        :>> mainSuccess = "The UI surfaces notifications for healthcheck failures, drift, available image updates, and failed backups (via the existing notify channel), with a badge/inbox so the operator sees what changed since last visit.";
+        :>> extensions = "Datastore updates are notify-only (never auto-applied); notifications link to the stack/view that can resolve them.";
+    }
+
+    use case ucBulkOps : UseCase {
+        :>> id = "e8e9a50f-32ef-4e58-ae6b-0eebe03b4068";
+        :>> title = "Act across many stacks at once";
+        :>> createdAt = "2026-07-27";
+        :>> createdBy = "wweatherholtz";
+        :>> description = "Riley operates a dozen stacks and wants fleet-wide actions.";
+        :>> mainSuccess = "The operator can run a check/backup across all stacks, and review + apply available updates across stacks in one place, each still going through the per-stack guarded path (guardrails, backup, health-gate, rollback) and kind policy (datastores notify-only).";
+        :>> extensions = "Bulk actions report per-stack success/failure individually; a block/failure on one stack never silently affects the others.";
+    }
 }

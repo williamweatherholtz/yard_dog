@@ -122,9 +122,34 @@ pub fn restore(dir: &Path, sha: &str) -> io::Result<String> {
     Ok(git_ok(dir, &["rev-parse", "HEAD"])?.trim().to_string())
 }
 
+/// Unified diff of the config between two points. `to = None` diffs `from`
+/// against the current working tree. Returns git's diff output (may be empty).
+pub fn diff(dir: &Path, from: &str, to: Option<&str>) -> io::Result<String> {
+    match to {
+        Some(t) => git_ok(dir, &["diff", from, t, "--", "."]),
+        None => git_ok(dir, &["diff", from, "--", "."]),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diff_shows_changes_between_snapshots() {
+        let dir = tempfile::tempdir().unwrap();
+        init(dir.path()).unwrap();
+        std::fs::write(dir.path().join("docker-compose.yml"), "image: nginx:1.27\n").unwrap();
+        let a = snapshot(dir.path(), "a").unwrap();
+        std::fs::write(dir.path().join("docker-compose.yml"), "image: nginx:1.29\n").unwrap();
+        let b = snapshot(dir.path(), "b").unwrap();
+
+        let d = diff(dir.path(), &a, Some(&b)).unwrap();
+        assert!(d.contains("-image: nginx:1.27"), "diff shows removed line:\n{d}");
+        assert!(d.contains("+image: nginx:1.29"), "diff shows added line:\n{d}");
+        // a snapshot vs. the (matching) working tree is empty
+        assert!(diff(dir.path(), &b, None).unwrap().trim().is_empty(), "no diff vs current tree");
+    }
 
     #[test]
     fn init_creates_repo_with_ignore_and_attributes() {

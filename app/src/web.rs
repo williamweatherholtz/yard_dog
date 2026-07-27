@@ -10,7 +10,8 @@
 //!     paths, no `..`), so the API can never read or write outside it.
 
 use crate::drift::{self, DriftKind};
-use crate::{compose, guardrails, lifecycle, preflight, registry, stacks, updates, workload};
+use crate::lifecycle::LifecycleState;
+use crate::{compose, gitver, guardrails, lifecycle, preflight, registry, stacks, updates, workload};
 use std::io;
 use std::path::{Path, PathBuf};
 use tiny_http::{Header, Method, Response, Server};
@@ -87,6 +88,57 @@ fn json_escape(s: &str) -> String {
     serde_json::Value::String(s.to_string()).to_string()
 }
 
+/// JSON array of guardrail findings.
+fn findings_json(findings: &[guardrails::Finding]) -> String {
+    let items: Vec<String> = findings
+        .iter()
+        .map(|f| {
+            let sev = match f.severity {
+                guardrails::Severity::Block => "block",
+                guardrails::Severity::Warn => "warn",
+            };
+            format!(
+                "{{\"service\":{},\"rule\":{},\"severity\":{},\"message\":{}}}",
+                json_escape(&f.service),
+                json_escape(&f.rule),
+                json_escape(sev),
+                json_escape(&f.message)
+            )
+        })
+        .collect();
+    format!("[{}]", items.join(","))
+}
+
+/// `GET /api/compose?compose=REL` — the raw compose text for the editor.
+fn compose_text_json(root: &Path, rel: &str) -> Option<String> {
+    let p = safe_join(root, rel)?;
+    let yaml = std::fs::read_to_string(&p).ok()?;
+    Some(format!("{{\"yaml\":{}}}", json_escape(&yaml)))
+}
+
+/// `GET /api/history?compose=REL` — git snapshots for the stack, newest-first.
+fn history_json(root: &Path, rel: &str) -> Option<String> {
+    let p = safe_join(root, rel)?;
+    let dir = p.parent()?;
+    let items: Vec<String> = gitver::history(dir)
+        .unwrap_or_default()
+        .iter()
+        .map(|(sha, msg)| format!("{{\"sha\":{},\"message\":{}}}", json_escape(sha), json_escape(msg)))
+        .collect();
+    Some(format!("{{\"items\":[{}]}}", items.join(",")))
+}
+
+/// `GET /api/diff?compose=REL&from=SHA[&to=SHA]` — unified diff of the config.
+fn diff_json(root: &Path, query: &str) -> Option<String> {
+    let rel = query_param(query, "compose")?;
+    let from = query_param(query, "from")?;
+    let to = query_param(query, "to");
+    let p = safe_join(root, &rel)?;
+    let dir = p.parent()?;
+    let d = gitver::diff(dir, &from, to.as_deref()).unwrap_or_default();
+    Some(format!("{{\"diff\":{}}}", json_escape(&d)))
+}
+
 /// `GET /api/stacks` — the stacks discovered under root, each with lifecycle.
 fn stacks_json(root: &Path) -> String {
     let list = stacks::discover_stacks(root).unwrap_or_default();
@@ -103,12 +155,17 @@ fn stacks_json(root: &Path) -> String {
             let state = lifecycle::read_state(dir);
             let yaml = std::fs::read_to_string(&s.compose_path).unwrap_or_default();
             let n = workload::parse_services(&yaml).len();
+            let findings = guardrails::run_guardrails(&yaml);
+            let blocks = findings.iter().filter(|f| f.severity == guardrails::Severity::Block).count();
+            let warns = findings.iter().filter(|f| f.severity == guardrails::Severity::Warn).count();
             format!(
-                "{{\"name\":{},\"compose\":{},\"lifecycle\":{},\"services\":{}}}",
+                "{{\"name\":{},\"compose\":{},\"lifecycle\":{},\"services\":{},\"blocks\":{},\"warns\":{}}}",
                 json_escape(&s.name),
                 json_escape(&rel),
                 json_escape(state.as_str()),
-                n
+                n,
+                blocks,
+                warns
             )
         })
         .collect();
@@ -235,6 +292,59 @@ fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
             let Some(abs) = compose_abs(rel) else { return bad("path outside root") };
             (200, run_tool(&yd, &["backup".into(), abs, "--run".into(), "--dest".into(), dest.into()]))
         }
+        // Live validation for the editor: guardrails + preflight over posted YAML,
+        // no write. Lifecycle is treated as Draft (the gate is not about the text).
+        "/api/validate" => {
+            let yaml = field(&v, "yaml").unwrap_or("");
+            let findings = guardrails::run_guardrails(yaml);
+            let p = preflight::assess(yaml, LifecycleState::Draft);
+            (200, format!(
+                "{{\"ready\":{},\"blocks\":{},\"warns\":{},\"guardrails\":{}}}",
+                p.ready, p.blocks, p.warns, findings_json(&findings)
+            ))
+        }
+        // Save the edited compose and snapshot it (git). Does not deploy.
+        "/api/save" => {
+            let (Some(rel), Some(yaml)) = (field(&v, "compose"), field(&v, "yaml")) else {
+                return bad("compose and yaml required");
+            };
+            let Some(abs) = safe_join(root, rel) else { return bad("path outside root") };
+            let dir = match abs.parent() {
+                Some(d) => d.to_path_buf(),
+                None => return bad("bad path"),
+            };
+            let result = (|| -> std::io::Result<String> {
+                std::fs::create_dir_all(&dir)?;
+                std::fs::write(&abs, yaml)?;
+                gitver::ensure_repo(&dir)?;
+                let sha = gitver::snapshot(&dir, "yd ui edit")?;
+                Ok(sha)
+            })();
+            match result {
+                Ok(sha) => (200, format!("{{\"ok\":true,\"sha\":{}}}", json_escape(&sha))),
+                Err(e) => (200, format!("{{\"ok\":false,\"error\":{}}}", json_escape(&e.to_string()))),
+            }
+        }
+        // Restore a past snapshot (snapshots current first). Does not redeploy.
+        "/api/restore" => {
+            let (Some(rel), Some(sha)) = (field(&v, "compose"), field(&v, "sha")) else {
+                return bad("compose and sha required");
+            };
+            let Some(abs) = safe_join(root, rel) else { return bad("path outside root") };
+            let dir = match abs.parent() {
+                Some(d) => d.to_path_buf(),
+                None => return bad("bad path"),
+            };
+            let result = (|| -> std::io::Result<String> {
+                gitver::ensure_repo(&dir)?;
+                gitver::snapshot(&dir, "yd ui pre-restore")?;
+                gitver::restore(&dir, sha)
+            })();
+            match result {
+                Ok(new_sha) => (200, format!("{{\"ok\":true,\"sha\":{}}}", json_escape(&new_sha))),
+                Err(e) => (200, format!("{{\"ok\":false,\"error\":{}}}", json_escape(&e.to_string()))),
+            }
+        }
         _ => (404, "{\"error\":\"unknown action\"}".into()),
     }
 }
@@ -294,6 +404,18 @@ pub fn serve(port: u16, root: &Path) -> io::Result<()> {
             (Method::Get, "/api/updates") => match query_param(&query, "compose").and_then(|r| updates_json(&root, &r)) {
                 Some(b) => json_response(200, b),
                 None => json_response(400, "{\"error\":\"compose required or outside root\"}".into()),
+            },
+            (Method::Get, "/api/compose") => match query_param(&query, "compose").and_then(|r| compose_text_json(&root, &r)) {
+                Some(b) => json_response(200, b),
+                None => json_response(404, "{\"error\":\"not found or outside root\"}".into()),
+            },
+            (Method::Get, "/api/history") => match query_param(&query, "compose").and_then(|r| history_json(&root, &r)) {
+                Some(b) => json_response(200, b),
+                None => json_response(400, "{\"error\":\"compose required or outside root\"}".into()),
+            },
+            (Method::Get, "/api/diff") => match diff_json(&root, &query) {
+                Some(b) => json_response(200, b),
+                None => json_response(400, "{\"error\":\"compose + from required\"}".into()),
             },
             (Method::Post, p) if p.starts_with("/api/") => {
                 // Anti-CSRF: require an application/json body and a loopback (or

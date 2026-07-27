@@ -11,130 +11,107 @@
     --ok: #2f9e59; --warn: #c9871f; --bad: #cf4141; --info: #3b6fd4;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #17150f; --panel: #201d16; --panel-2: #2a251c; --ink: #ece7db; --muted: #a49d8c;
-      --line: #322c22; --accent: #e0a94a; --accent-ink: #f2cd85;
-      --ok: #56c07f; --warn: #e0a94a; --bad: #e86a6a; --info: #6f9bf0;
-    }
-  }
+  @media (prefers-color-scheme: dark) { :root {
+    --bg:#17150f; --panel:#201d16; --panel-2:#2a251c; --ink:#ece7db; --muted:#a49d8c;
+    --line:#322c22; --accent:#e0a94a; --accent-ink:#f2cd85;
+    --ok:#56c07f; --warn:#e0a94a; --bad:#e86a6a; --info:#6f9bf0; } }
   :root[data-theme="dark"] {
-    --bg: #17150f; --panel: #201d16; --panel-2: #2a251c; --ink: #ece7db; --muted: #a49d8c;
-    --line: #322c22; --accent: #e0a94a; --accent-ink: #f2cd85;
-    --ok: #56c07f; --warn: #e0a94a; --bad: #e86a6a; --info: #6f9bf0;
-  }
+    --bg:#17150f; --panel:#201d16; --panel-2:#2a251c; --ink:#ece7db; --muted:#a49d8c;
+    --line:#322c22; --accent:#e0a94a; --accent-ink:#f2cd85;
+    --ok:#56c07f; --warn:#e0a94a; --bad:#e86a6a; --info:#6f9bf0; }
   :root[data-theme="light"] {
-    --bg: #f6f5f2; --panel: #ffffff; --panel-2: #efede8; --ink: #1e1c19; --muted: #6d6a63;
-    --line: #e2ded6; --accent: #c9871f; --accent-ink: #7a4f08;
-    --ok: #2f9e59; --warn: #c9871f; --bad: #cf4141; --info: #3b6fd4;
-  }
+    --bg:#f6f5f2; --panel:#ffffff; --panel-2:#efede8; --ink:#1e1c19; --muted:#6d6a63;
+    --line:#e2ded6; --accent:#c9871f; --accent-ink:#7a4f08;
+    --ok:#2f9e59; --warn:#c9871f; --bad:#cf4141; --info:#3b6fd4; }
   * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--ink);
-    font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-    -webkit-font-smoothing: antialiased;
-  }
-  header.top {
-    display: flex; align-items: center; gap: 12px; padding: 12px 18px;
-    border-bottom: 1px solid var(--line); background: var(--panel);
-    position: sticky; top: 0; z-index: 5;
-  }
-  .brand { display: flex; align-items: baseline; gap: 9px; font-weight: 700; letter-spacing: -0.01em; }
-  .brand .paw { color: var(--accent); font-size: 20px; }
-  .brand small { font-weight: 500; color: var(--muted); letter-spacing: .02em; }
-  .top .spacer { flex: 1; }
-  .loopback { font: 12px/1 var(--mono); color: var(--muted); border: 1px solid var(--line);
-    padding: 5px 8px; border-radius: 6px; background: var(--panel-2); }
-  .loopback b { color: var(--ok); }
-  button {
-    font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--panel-2);
-    color: var(--ink); padding: 6px 11px; border-radius: 7px; transition: background .12s, border-color .12s;
-  }
-  button:hover { border-color: var(--accent); }
-  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  button.primary { background: var(--accent); color: #17150f; border-color: var(--accent); font-weight: 600; }
-  button.danger { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); color: var(--bad); }
-  button.danger:hover { background: color-mix(in srgb, var(--bad) 12%, transparent); }
-  button:disabled { opacity: .45; cursor: not-allowed; }
-  .layout { display: grid; grid-template-columns: 300px 1fr; min-height: calc(100vh - 58px); }
-  @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
-
-  aside {
-    border-right: 1px solid var(--line); background: var(--panel); padding: 12px;
-    overflow-y: auto;
-  }
-  .rail-head { display: flex; align-items: center; gap: 8px; margin: 4px 4px 12px; }
-  .rail-head input {
-    flex: 1; min-width: 0; font: 13px/1 var(--mono); padding: 7px 9px; border-radius: 7px;
-    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
-  }
-  .stack-item {
-    width: 100%; text-align: left; display: flex; flex-direction: column; gap: 4px;
-    padding: 10px 11px; border-radius: 9px; border: 1px solid transparent; background: transparent; margin-bottom: 3px;
-  }
-  .stack-item:hover { background: var(--panel-2); }
-  .stack-item.active { background: var(--panel-2); border-color: var(--line); }
-  .stack-item .nm { font-weight: 600; }
-  .stack-item .sub { font: 12px/1.3 var(--mono); color: var(--muted); display: flex; gap: 8px; align-items: center; }
-
-  main { padding: 20px 24px; overflow-y: auto; }
-  .empty { color: var(--muted); max-width: 46ch; margin-top: 8vh; }
-  .empty h2 { color: var(--ink); font-weight: 650; }
-
-  .detail-head { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 4px; }
-  .detail-head h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
-  .path { font: 12px/1 var(--mono); color: var(--muted); margin-bottom: 16px; word-break: break-all; }
-
-  .badge { font: 600 12px/1 system-ui; padding: 5px 9px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; }
-  .badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-  .badge.ready { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
-  .badge.notready { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
-  .chip { font: 600 11px/1 var(--mono); text-transform: uppercase; letter-spacing: .04em;
-    padding: 4px 8px; border-radius: 6px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
-  .chip.draft { color: var(--muted); }
-  .chip.active { color: var(--ok); }
-  .chip.deprecated { color: var(--warn); }
-  .chip.archived { color: var(--bad); }
-
-  .actionbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 22px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
-
-  section h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 22px 0 10px; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
-  th { font: 600 12px/1 system-ui; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-  td.img { font: 13px/1.3 var(--mono); word-break: break-all; }
-  .kind { font: 600 11px/1 var(--mono); text-transform: uppercase; padding: 3px 7px; border-radius: 5px;
-    background: color-mix(in srgb, var(--info) 14%, transparent); color: var(--info); }
-  .kind.datastore { background: color-mix(in srgb, var(--bad) 13%, transparent); color: var(--bad); }
-  .kind.proxy { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent-ink); }
-  .stchip { font: 600 11px/1 system-ui; padding: 4px 8px; border-radius: 999px; display: inline-flex; align-items: center; gap: 5px; margin-right: 6px; }
-  .stchip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-  .stchip.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 13%, transparent); }
-  .stchip.attn { color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
-  .stchip.bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 13%, transparent); }
-  .stchip.dim { color: var(--muted); background: var(--panel-2); }
-
-  .finding { display: flex; gap: 10px; align-items: baseline; padding: 8px 10px; border-radius: 8px; margin-bottom: 6px; border: 1px solid var(--line); }
-  .finding .sev { font: 600 11px/1 var(--mono); text-transform: uppercase; padding: 3px 6px; border-radius: 5px; flex: none; }
-  .finding.block { border-color: color-mix(in srgb, var(--bad) 40%, var(--line)); }
-  .finding.block .sev { background: var(--bad); color: #fff; }
-  .finding.warn .sev { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
-  .finding .msg { flex: 1; }
-  .finding .svc { font: 12px/1 var(--mono); color: var(--muted); }
-  .clean { color: var(--ok); font-size: 14px; }
-
-  .console { margin-top: 26px; }
-  .console pre {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
-    font: 12.5px/1.55 var(--mono); color: var(--ink); max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 0;
-  }
-  .console .line-ok { color: var(--ok); }
-  .console .line-bad { color: var(--bad); }
-  .console .line-cmd { color: var(--accent-ink); font-weight: 600; }
-  .console .line-dim { color: var(--muted); }
-  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: sp .7s linear infinite; vertical-align: -1px; }
-  @keyframes sp { to { transform: rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; -webkit-font-smoothing:antialiased; }
+  header.top { display:flex; align-items:center; gap:12px; padding:12px 18px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:5; }
+  .brand { display:flex; align-items:baseline; gap:9px; font-weight:700; letter-spacing:-.01em; }
+  .brand .paw { color:var(--accent); font-size:20px; }
+  .brand small { font-weight:500; color:var(--muted); }
+  .top .spacer { flex:1; }
+  .loopback { font:12px/1 var(--mono); color:var(--muted); border:1px solid var(--line); padding:5px 8px; border-radius:6px; background:var(--panel-2); }
+  .loopback b { color:var(--ok); }
+  button { font:inherit; cursor:pointer; border:1px solid var(--line); background:var(--panel-2); color:var(--ink); padding:6px 11px; border-radius:7px; transition:background .12s,border-color .12s; }
+  button:hover { border-color:var(--accent); }
+  button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  button.primary { background:var(--accent); color:#17150f; border-color:var(--accent); font-weight:600; }
+  button.danger { border-color:color-mix(in srgb,var(--bad) 45%,var(--line)); color:var(--bad); }
+  button.danger:hover { background:color-mix(in srgb,var(--bad) 12%,transparent); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .layout { display:grid; grid-template-columns:290px 1fr; min-height:calc(100vh - 58px); }
+  @media (max-width:820px){ .layout{ grid-template-columns:1fr; } }
+  aside { border-right:1px solid var(--line); background:var(--panel); padding:12px; overflow-y:auto; }
+  .rail-head { display:flex; gap:8px; margin:4px 4px 12px; }
+  .rail-head input { flex:1; min-width:0; font:13px/1 var(--mono); padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink); }
+  .stack-item { width:100%; text-align:left; display:flex; align-items:center; gap:8px; padding:10px 11px; border-radius:9px; border:1px solid transparent; background:transparent; margin-bottom:3px; }
+  .stack-item:hover { background:var(--panel-2); }
+  .stack-item.active { background:var(--panel-2); border-color:var(--line); }
+  .stack-item .col { display:flex; flex-direction:column; gap:4px; min-width:0; flex:1; }
+  .stack-item .nm { font-weight:600; }
+  .stack-item .sub { font:12px/1.3 var(--mono); color:var(--muted); display:flex; gap:8px; }
+  .badge-issue { font:600 11px/1 system-ui; padding:3px 7px; border-radius:999px; flex:none; }
+  .badge-issue.block { background:color-mix(in srgb,var(--bad) 16%,transparent); color:var(--bad); }
+  .badge-issue.warn { background:color-mix(in srgb,var(--warn) 18%,transparent); color:var(--warn); }
+  .badge-issue.ok { background:color-mix(in srgb,var(--ok) 15%,transparent); color:var(--ok); }
+  .newbtn { width:100%; margin-top:8px; }
+  main { padding:18px 22px; overflow-y:auto; }
+  .empty { color:var(--muted); max-width:46ch; margin-top:8vh; }
+  .empty h2 { color:var(--ink); font-weight:650; }
+  .detail-head { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
+  .detail-head h1 { font-size:22px; margin:0; letter-spacing:-.01em; }
+  .path { font:12px/1 var(--mono); color:var(--muted); margin:2px 0 12px; word-break:break-all; }
+  .badge { font:600 12px/1 system-ui; padding:5px 9px; border-radius:999px; display:inline-flex; align-items:center; gap:6px; }
+  .badge::before { content:""; width:7px; height:7px; border-radius:50%; background:currentColor; }
+  .badge.ready { color:var(--ok); background:color-mix(in srgb,var(--ok) 14%,transparent); }
+  .badge.notready { color:var(--bad); background:color-mix(in srgb,var(--bad) 14%,transparent); }
+  .chip { font:600 11px/1 var(--mono); text-transform:uppercase; letter-spacing:.04em; padding:4px 8px; border-radius:6px; background:var(--panel-2); color:var(--muted); border:1px solid var(--line); }
+  .chip.active { color:var(--ok); } .chip.deprecated { color:var(--warn); } .chip.archived { color:var(--bad); }
+  .tabs { display:flex; gap:2px; border-bottom:1px solid var(--line); margin:14px 0 18px; flex-wrap:wrap; }
+  .tab { background:transparent; border:none; border-bottom:2px solid transparent; border-radius:0; padding:8px 12px; color:var(--muted); font-weight:600; }
+  .tab:hover { color:var(--ink); border-color:var(--line); }
+  .tab.active { color:var(--ink); border-color:var(--accent); }
+  .tab .soon { font:600 9px/1 var(--mono); color:var(--muted); vertical-align:super; }
+  .actionbar { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:18px; }
+  section h3 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:20px 0 10px; }
+  table { width:100%; border-collapse:collapse; }
+  th,td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  th { font:600 12px/1 system-ui; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  td.img { font:13px/1.3 var(--mono); word-break:break-all; }
+  .kind { font:600 11px/1 var(--mono); text-transform:uppercase; padding:3px 7px; border-radius:5px; background:color-mix(in srgb,var(--info) 14%,transparent); color:var(--info); }
+  .kind.datastore { background:color-mix(in srgb,var(--bad) 13%,transparent); color:var(--bad); }
+  .kind.proxy { background:color-mix(in srgb,var(--accent) 16%,transparent); color:var(--accent-ink); }
+  .stchip { font:600 11px/1 system-ui; padding:4px 8px; border-radius:999px; display:inline-flex; align-items:center; gap:5px; margin-right:6px; }
+  .stchip::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .stchip.ok { color:var(--ok); background:color-mix(in srgb,var(--ok) 13%,transparent); }
+  .stchip.attn { color:var(--warn); background:color-mix(in srgb,var(--warn) 15%,transparent); }
+  .stchip.bad { color:var(--bad); background:color-mix(in srgb,var(--bad) 13%,transparent); }
+  .stchip.dim { color:var(--muted); background:var(--panel-2); }
+  .issue { display:flex; gap:10px; align-items:baseline; padding:8px 10px; border-radius:8px; margin-bottom:6px; border:1px solid var(--line); }
+  .issue .sev { font:600 11px/1 var(--mono); text-transform:uppercase; padding:3px 6px; border-radius:5px; flex:none; }
+  .issue.block { border-color:color-mix(in srgb,var(--bad) 40%,var(--line)); } .issue.block .sev { background:var(--bad); color:#fff; }
+  .issue.warn .sev { background:color-mix(in srgb,var(--warn) 22%,transparent); color:var(--warn); }
+  .issue.info .sev { background:color-mix(in srgb,var(--info) 18%,transparent); color:var(--info); }
+  .issue .src { font:12px/1 var(--mono); color:var(--muted); }
+  .clean { color:var(--ok); }
+  textarea.editor { width:100%; min-height:340px; font:13px/1.5 var(--mono); padding:12px 14px; border:1px solid var(--line); border-radius:10px; background:var(--panel); color:var(--ink); resize:vertical; tab-size:2; }
+  .editrow { display:flex; gap:16px; align-items:flex-start; }
+  .editrow .col-main { flex:1; min-width:0; }
+  .validate { width:280px; flex:none; }
+  .validate .v-badge { margin-bottom:10px; }
+  pre.diff { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; font:12.5px/1.5 var(--mono); overflow:auto; max-height:420px; white-space:pre; }
+  pre.diff .add { color:var(--ok); } pre.diff .del { color:var(--bad); } pre.diff .hdr { color:var(--accent-ink); }
+  .hist { list-style:none; padding:0; margin:0; }
+  .hist li { display:flex; align-items:center; gap:12px; padding:9px 10px; border-bottom:1px solid var(--line); }
+  .hist .sha { font:12px/1 var(--mono); color:var(--muted); }
+  .hist .msg { flex:1; }
+  .console { margin-top:22px; }
+  .console pre { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 15px; font:12.5px/1.55 var(--mono); max-height:260px; overflow:auto; white-space:pre-wrap; word-break:break-word; margin:0; }
+  .console .ok { color:var(--ok); } .console .bad { color:var(--bad); } .console .cmd { color:var(--accent-ink); font-weight:600; } .console .dim { color:var(--muted); }
+  .spin { display:inline-block; width:12px; height:12px; border:2px solid var(--muted); border-top-color:transparent; border-radius:50%; animation:sp .7s linear infinite; vertical-align:-1px; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion:reduce){ .spin{ animation:none; } }
+  .muted { color:var(--muted); }
 </style>
 </head>
 <body>
@@ -144,202 +121,206 @@
   <span class="loopback">🔒 <b>loopback</b> · 127.0.0.1</span>
   <button id="theme" title="Toggle theme" aria-label="Toggle theme">◐</button>
 </header>
-
 <div class="layout">
   <aside>
     <div class="rail-head">
       <input id="filter" placeholder="filter stacks…" autocomplete="off" />
-      <button id="refresh" title="Reload stacks">↻</button>
+      <button id="refresh" title="Reload">↻</button>
     </div>
     <div id="stacks"></div>
+    <button class="newbtn" id="newstack">＋ New stack</button>
   </aside>
-  <main id="main">
-    <div class="empty">
-      <h2>Select a stack</h2>
-      <p>Yard Dog is serving the stacks discovered under your working directory. Pick one on the left to see its services, guardrail check, and lifecycle — and to deploy, upgrade, back up, or check drift.</p>
-    </div>
-  </main>
+  <main id="main"><div class="empty"><h2>Select a stack</h2><p>Pick a stack on the left to see its issues, edit its compose, review history, and act on it — or create a new one.</p></div></main>
 </div>
-
 <script>
-const $ = (s, r=document) => r.querySelector(s);
-const el = (t, c, txt) => { const e = document.createElement(t); if (c) e.className = c; if (txt != null) e.textContent = txt; return e; };
-let current = null, stacksCache = [];
+const $ = (s,r=document)=>r.querySelector(s);
+const el=(t,c,txt)=>{const e=document.createElement(t); if(c)e.className=c; if(txt!=null)e.textContent=txt; return e;};
+let stacks=[], current=null, tab="overview", detail=null;
+const TABS=[["overview","Overview"],["compose","Compose"],["history","History"],["mounts","Mounts",1],["permissions","Permissions",1],["backups","Backups",1],["logs","Logs",1]];
 
-// theme
-const themeBtn = $("#theme");
-themeBtn.onclick = () => {
-  const now = document.documentElement.getAttribute("data-theme");
-  const next = now === "dark" ? "light" : (now === "light" ? "dark" : (matchMedia("(prefers-color-scheme: dark)").matches ? "light" : "dark"));
-  document.documentElement.setAttribute("data-theme", next);
-};
+$("#theme").onclick=()=>{const n=document.documentElement.getAttribute("data-theme");const nx=n==="dark"?"light":(n==="light"?"dark":(matchMedia("(prefers-color-scheme: dark)").matches?"light":"dark"));document.documentElement.setAttribute("data-theme",nx);};
 
-async function api(path, opts) {
-  const r = await fetch(path, opts);
-  const t = await r.text();
-  try { return { ok: r.ok, data: JSON.parse(t) }; } catch { return { ok: r.ok, data: { raw: t } }; }
+async function api(path,opts){const r=await fetch(path,opts);const t=await r.text();try{return{ok:r.ok,data:JSON.parse(t)};}catch{return{ok:r.ok,data:{raw:t}};}}
+async function post(path,body){return api(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});}
+
+async function loadStacks(){
+  const box=$("#stacks"); const {data}=await api("/api/stacks"); stacks=data.stacks||[];
+  renderRail();
 }
-
-async function loadStacks() {
-  const box = $("#stacks");
-  box.innerHTML = "";
-  const { data } = await api("/api/stacks");
-  stacksCache = data.stacks || [];
-  if (!stacksCache.length) { box.append(el("p", "empty", "No compose stacks found under the served root.")); return; }
-  renderStacks();
-}
-function renderStacks() {
-  const box = $("#stacks"); box.innerHTML = "";
-  const f = $("#filter").value.toLowerCase();
-  for (const s of stacksCache) {
-    if (f && !s.name.toLowerCase().includes(f)) continue;
-    const b = el("button", "stack-item" + (current === s.compose ? " active" : ""));
-    b.append(el("span", "nm", s.name));
-    const sub = el("span", "sub");
-    sub.append(el("span", "chip " + s.lifecycle, s.lifecycle));
-    sub.append(el("span", null, s.services + " svc"));
-    b.append(sub);
-    b.onclick = () => selectStack(s.compose);
+function renderRail(){
+  const box=$("#stacks"); box.innerHTML=""; const f=$("#filter").value.toLowerCase();
+  if(!stacks.length){ box.append(el("p","muted","No stacks under the served root.")); return; }
+  for(const s of stacks){
+    if(f && !s.name.toLowerCase().includes(f)) continue;
+    const b=el("button","stack-item"+(current===s.compose?" active":""));
+    const col=el("div","col"); col.append(el("span","nm",s.name));
+    const sub=el("span","sub"); sub.append(el("span","chip "+s.lifecycle,s.lifecycle)); sub.append(el("span",null,s.services+" svc")); col.append(sub);
+    b.append(col);
+    if(s.blocks>0) b.append(el("span","badge-issue block",s.blocks+"⚠"));
+    else if(s.warns>0) b.append(el("span","badge-issue warn",s.warns));
+    else b.append(el("span","badge-issue ok","✓"));
+    b.onclick=()=>selectStack(s.compose);
     box.append(b);
   }
 }
-$("#filter").oninput = renderStacks;
-$("#refresh").onclick = loadStacks;
+$("#filter").oninput=renderRail; $("#refresh").onclick=loadStacks;
 
-async function selectStack(compose) {
-  current = compose; renderStacks();
-  const main = $("#main"); main.innerHTML = "Loading…";
-  const { ok, data } = await api("/api/stack?compose=" + encodeURIComponent(compose));
-  if (!ok) { main.innerHTML = ""; main.append(el("p", "empty", "Could not load stack.")); return; }
-  renderDetail(data);
+async function selectStack(compose,keepTab){ current=compose; if(!keepTab)tab="overview"; renderRail();
+  $("#main").innerHTML="Loading…";
+  const {ok,data}=await api("/api/stack?compose="+encodeURIComponent(compose));
+  if(!ok){ $("#main").innerHTML=""; $("#main").append(el("p","empty","Could not load stack.")); return; }
+  detail=data; renderShell();
 }
+function stackName(c){ return (stacks.find(s=>s.compose===c)||{}).name||c; }
 
-function renderDetail(d) {
-  const main = $("#main"); main.innerHTML = "";
-  const head = el("div", "detail-head");
-  const name = (stacksCache.find(s => s.compose === d.compose) || {}).name || d.compose;
-  head.append(el("h1", null, name));
-  head.append(el("span", "badge " + (d.ready ? "ready" : "notready"), d.ready ? "READY" : "NOT READY"));
-  head.append(el("span", "chip " + d.lifecycle, d.lifecycle));
-  main.append(head);
-  main.append(el("div", "path", d.compose));
+function renderShell(){
+  const m=$("#main"); m.innerHTML="";
+  const head=el("div","detail-head");
+  head.append(el("h1",null,stackName(current)));
+  head.append(el("span","badge "+(detail.ready?"ready":"notready"),detail.ready?"READY":"NOT READY"));
+  head.append(el("span","chip "+detail.lifecycle,detail.lifecycle));
+  m.append(head); m.append(el("div","path",detail.compose));
+  const tabs=el("div","tabs");
+  for(const [id,label,soon] of TABS){ const t=el("button","tab"+(tab===id?" active":""),label); if(soon)t.append(el("span","soon"," soon")); t.onclick=()=>{tab=id; renderShell();}; tabs.append(t); }
+  m.append(tabs);
+  const body=el("div"); body.id="tabbody"; m.append(body);
+  ({overview:renderOverview,compose:renderCompose,history:renderHistory}[tab]||renderSoon)();
+  // console lives under every tab
+  const c=el("section","console"); c.append(el("h3",null,"Output")); const pre=el("pre"); pre.id="console"; pre.append(el("span","dim","Actions print here.")); c.append(pre); m.append(c);
+}
+function renderSoon(){ $("#tabbody").append(el("p","empty","This view is coming soon — the roadmap use case is recorded.")); }
+function logLine(cls,text){ const pre=$("#console"); if(!pre)return; if(pre.firstChild&&pre.firstChild.className==="dim")pre.innerHTML=""; pre.append(el("span",cls,text+"\n")); pre.scrollTop=pre.scrollHeight; }
 
-  // actions
-  const bar = el("div", "actionbar");
-  const act = (label, cls, fn) => { const b = el("button", cls, label); b.onclick = fn; bar.append(b); return b; };
-  act("Deploy", "primary", () => confirmAction("Deploy this stack? Yard Dog will back up, snapshot, and health-gate the change.", "/api/deploy", { compose: d.compose }, "deploy"));
-  act("↻ Status", "", () => refreshStatus(d.compose));
-  act("Back up", "", () => confirmAction("Run an application-consistent backup of this stack?", "/api/backup", { compose: d.compose }, "backup"));
-  // lifecycle transitions relevant to the current state
-  const transitions = { draft: ["activate", "archive"], active: ["deprecate", "archive"], deprecated: ["activate", "archive"], archived: ["restore"] };
-  for (const ev of (transitions[d.lifecycle] || [])) {
-    act(ev[0].toUpperCase() + ev.slice(1), "", () => doAction("/api/lifecycle", { compose: d.compose, event: ev }, "lifecycle " + ev).then(() => selectStack(d.compose)));
+// ---- Overview ----
+function renderOverview(){
+  const b=$("#tabbody");
+  const bar=el("div","actionbar");
+  const act=(l,cls,fn)=>{const x=el("button",cls,l); x.onclick=fn; bar.append(x);};
+  act("Deploy","primary",()=>confirmAct("Deploy this stack (backup → snapshot → health-gate → rollback on failure)?","/api/deploy",{compose:current},"deploy"));
+  act("↻ Status","",()=>refreshStatus());
+  act("Back up","",()=>confirmAct("Run an application-consistent backup?","/api/backup",{compose:current},"backup"));
+  const trans={draft:["activate","archive"],active:["deprecate","archive"],deprecated:["activate","archive"],archived:["restore"]};
+  for(const ev of (trans[detail.lifecycle]||[])) act(ev[0].toUpperCase()+ev.slice(1),"",()=>doAct("/api/lifecycle",{compose:current,event:ev},"lifecycle "+ev).then(()=>selectStack(current,true)));
+  act("Down","danger",()=>confirmAct("Stop & remove this stack's containers (docker compose down)?","/api/down",{compose:current},"down"));
+  b.append(bar);
+  // issues
+  const isec=el("section"); const blocks=detail.guardrails.filter(g=>g.severity==="block"), warns=detail.guardrails.filter(g=>g.severity==="warn");
+  isec.append(el("h3",null,`Issues — ${blocks.length} blocking, ${warns.length} warning${warns.length===1?"":"s"}`));
+  if(!detail.guardrails.length) isec.append(el("div","clean","✓ No guardrail issues."));
+  for(const g of [...blocks,...warns]){ const r=el("div","issue "+g.severity); r.append(el("span","sev",g.severity)); const msg=el("span"); msg.append(el("span","src",g.service+" · ")); msg.append(document.createTextNode(g.message)); r.append(msg); isec.append(r); }
+  b.append(isec);
+  // services + status
+  const ssec=el("section"); ssec.append(el("h3",null,"Services"));
+  const tbl=el("table"); const hr=el("tr"); ["Service","Image","Kind","Status",""].forEach(h=>hr.append(el("th",null,h))); tbl.append(hr);
+  for(const s of detail.services){ const tr=el("tr");
+    tr.append(el("td",null,s.name)); tr.append(el("td","img",s.image||"—"));
+    const kd=el("td"); kd.append(el("span","kind "+s.kind,s.kind)); tr.append(kd);
+    const st=el("td","status"); st.dataset.svc=s.name; st.append(el("span","dim","—")); tr.append(st);
+    const up=el("td"); const ub=el("button","","Upgrade…"); ub.onclick=()=>{const img=prompt(`New image for “${s.name}” (now: ${s.image||"?"}):`,s.image||""); if(img&&img!==s.image)confirmAct(`Upgrade ${s.name} to ${img}?`,"/api/upgrade",{compose:current,service:s.name,image:img},"upgrade "+s.name);}; up.append(ub); tr.append(up);
+    tbl.append(tr);
   }
-  act("Down", "danger", () => confirmAction("Stop and remove this stack's containers? (docker compose down)", "/api/down", { compose: d.compose }, "down"));
-  main.append(bar);
-
-  // services
-  const svcSec = el("section");
-  svcSec.append(el("h3", null, "Services"));
-  const table = el("table");
-  const thead = el("tr");
-  ["Service", "Image", "Kind", "Status", ""].forEach(h => thead.append(el("th", null, h)));
-  table.append(thead);
-  for (const s of d.services) {
-    const tr = el("tr");
-    tr.append(el("td", null, s.name));
-    tr.append(el("td", "img", s.image || "—"));
-    tr.append((() => { const td = el("td"); td.append(el("span", "kind " + s.kind, s.kind)); return td; })());
-    const st = el("td", "status"); st.dataset.svc = s.name; st.append(el("span", "line-dim", "—")); tr.append(st);
-    const up = el("td");
-    const b = el("button", "", "Upgrade…");
-    b.onclick = () => {
-      const img = prompt(`New image for “${s.name}” (current: ${s.image || "?"}):`, s.image || "");
-      if (img && img !== s.image) confirmAction(`Upgrade ${s.name} to ${img}? It will health-gate and roll back on failure.`, "/api/upgrade", { compose: d.compose, service: s.name, image: img }, "upgrade " + s.name);
-    };
-    up.append(b); tr.append(up);
-    table.append(tr);
-  }
-  svcSec.append(table);
-  main.append(svcSec);
-
-  // guardrails
-  const gSec = el("section");
-  gSec.append(el("h3", null, `Guardrails — ${d.blocks} blocking, ${d.warns} warning${d.warns === 1 ? "" : "s"}`));
-  if (!d.guardrails.length) {
-    gSec.append(el("div", "clean", "✓ No guardrail findings."));
-  } else {
-    for (const f of d.guardrails) {
-      const row = el("div", "finding " + f.severity);
-      row.append(el("span", "sev", f.severity));
-      const msg = el("span", "msg"); msg.append(el("span", "svc", f.service + " · ")); msg.append(document.createTextNode(f.message));
-      row.append(msg);
-      gSec.append(row);
-    }
-  }
-  main.append(gSec);
-
-  // console
-  const cSec = el("section", "console");
-  cSec.append(el("h3", null, "Output"));
-  const pre = el("pre"); pre.id = "console"; pre.append(el("span", "line-dim", "Actions and checks print here."));
-  cSec.append(pre);
-  main.append(cSec);
-
-  // auto-load drift + update chips (docker/network — non-blocking)
-  refreshStatus(d.compose);
+  ssec.append(tbl); b.append(ssec);
+  refreshStatus();
 }
-
-function logLine(cls, text) {
-  const pre = $("#console"); if (!pre) return;
-  if (pre.firstChild && pre.firstChild.className === "line-dim") pre.innerHTML = "";
-  pre.append(el("span", cls, text + "\n")); pre.scrollTop = pre.scrollHeight;
-}
-
-async function confirmAction(msg, path, body, label) {
-  if (!confirm(msg)) return;
-  return doAction(path, body, label);
-}
-async function doAction(path, body, label) {
-  logLine("line-cmd", "▶ yd " + label);
-  const busy = el("span", null); busy.innerHTML = ' <span class="spin"></span>'; $("#console")?.append(busy);
-  try {
-    const { data } = await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    busy.remove();
-    if (data.error) { logLine("line-bad", "✗ " + data.error); return; }
-    if (data.stdout && data.stdout.trim()) logLine("", data.stdout.trimEnd());
-    if (data.stderr && data.stderr.trim()) logLine("line-dim", data.stderr.trimEnd());
-    logLine(data.ok ? "line-ok" : "line-bad", (data.ok ? "✓ done" : "✗ failed") + " (exit " + data.exit + ")");
-    loadStacks();
-  } catch (e) { busy.remove(); logLine("line-bad", "✗ " + e); }
-}
-function chip(cls, text, title) { const s = el("span", "stchip " + cls, text); if (title) s.title = title; return s; }
-async function refreshStatus(compose) {
-  document.querySelectorAll("td.status").forEach(td => { td.innerHTML = ""; const s = el("span"); s.innerHTML = '<span class="spin"></span>'; td.append(s); });
-  const [drift, updates] = await Promise.all([
-    api("/api/drift?compose=" + encodeURIComponent(compose)).then(r => r.data).catch(() => ({})),
-    api("/api/updates?compose=" + encodeURIComponent(compose)).then(r => r.data).catch(() => ({})),
-  ]);
-  const driftBy = {}; (drift.items || []).forEach(i => driftBy[i.service] = i);
-  const updBy = {}; (updates.items || []).forEach(i => updBy[i.service] = i);
-  document.querySelectorAll("td.status").forEach(td => {
-    const svc = td.dataset.svc; td.innerHTML = "";
-    if (drift.available === false) td.append(chip("dim", "drift ?", "running-state unavailable (docker down?)"));
-    else {
-      const di = driftBy[svc];
-      if (!di) td.append(chip("ok", "in sync"));
-      else if (di.kind === "changed") td.append(chip("attn", "drift", (di.declared || "") + " → " + (di.running || "")));
-      else if (di.kind === "missing") td.append(chip("bad", "not running"));
-      else td.append(chip("attn", di.kind));
-    }
-    const ui = updBy[svc];
-    if (!ui || ui.status === "Unknown") td.append(chip("dim", "update ?"));
-    else if (ui.status === "UpToDate") td.append(chip("ok", "up-to-date"));
-    else if (ui.status === "UpdateAvailable") td.append(chip("attn", "update", "action: " + ui.action));
-    else td.append(chip("dim", ui.status));
+function chip(cls,text,title){const s=el("span","stchip "+cls,text); if(title)s.title=title; return s;}
+async function refreshStatus(){
+  document.querySelectorAll("td.status").forEach(td=>{td.innerHTML=""; const s=el("span"); s.innerHTML='<span class="spin"></span>'; td.append(s);});
+  const [drift,upd]=await Promise.all([api("/api/drift?compose="+encodeURIComponent(current)).then(r=>r.data).catch(()=>({})),api("/api/updates?compose="+encodeURIComponent(current)).then(r=>r.data).catch(()=>({}))]);
+  const db={},ub={}; (drift.items||[]).forEach(i=>db[i.service]=i); (upd.items||[]).forEach(i=>ub[i.service]=i);
+  document.querySelectorAll("td.status").forEach(td=>{const svc=td.dataset.svc; td.innerHTML="";
+    if(drift.available===false) td.append(chip("dim","drift ?","running-state unavailable"));
+    else { const di=db[svc]; if(!di)td.append(chip("ok","in sync")); else if(di.kind==="changed")td.append(chip("attn","drift",(di.declared||"")+" → "+(di.running||""))); else if(di.kind==="missing")td.append(chip("bad","not running")); else td.append(chip("attn",di.kind)); }
+    const u=ub[svc]; if(!u||u.status==="Unknown")td.append(chip("dim","update ?")); else if(u.status==="UpToDate")td.append(chip("ok","up-to-date")); else if(u.status==="UpdateAvailable")td.append(chip("attn","update","action: "+u.action)); else td.append(chip("dim",u.status));
   });
 }
 
+// ---- Compose editor ----
+async function renderCompose(){
+  const b=$("#tabbody");
+  const {data}=await api("/api/compose?compose="+encodeURIComponent(current));
+  const row=el("div","editrow");
+  const main=el("div","col-main");
+  const ta=el("textarea","editor"); ta.id="editor"; ta.value=(data&&data.yaml)||""; ta.spellcheck=false; main.append(ta);
+  const bar=el("div","actionbar"); bar.style.marginTop="12px";
+  const save=el("button","","Save (snapshot)"); save.onclick=()=>saveCompose(false); bar.append(save);
+  const saveDep=el("button","primary","Save & deploy"); saveDep.onclick=()=>saveCompose(true); bar.append(saveDep);
+  main.append(bar); row.append(main);
+  const side=el("div","validate"); side.id="vpanel"; side.append(el("div","muted","Validating…")); row.append(side);
+  b.append(row);
+  let t; ta.addEventListener("input",()=>{clearTimeout(t); t=setTimeout(validateEditor,400);});
+  validateEditor();
+}
+async function validateEditor(){
+  const yaml=$("#editor").value; const p=$("#vpanel"); p.innerHTML="";
+  const {data}=await post("/api/validate",{yaml});
+  p.append(el("div","v-badge "+"badge "+(data.ready?"ready":"notready"),data.ready?"READY":"NOT READY"));
+  p.append(el("div","muted",`${data.blocks} blocking · ${data.warns} warning${data.warns===1?"":"s"}`));
+  for(const g of (data.guardrails||[])){ const r=el("div","issue "+g.severity); r.style.marginTop="8px"; r.append(el("span","sev",g.severity)); const m=el("span"); m.append(el("span","src",g.service+" · ")); m.append(document.createTextNode(g.message)); r.append(m); p.append(r); }
+}
+async function saveCompose(deploy){
+  logLine("cmd","▶ save"+(deploy?" & deploy":""));
+  const {data}=await post("/api/save",{compose:current,yaml:$("#editor").value});
+  if(!data.ok){ logLine("bad","✗ "+(data.error||"save failed")); return; }
+  logLine("ok","✓ saved (snapshot "+((data.sha||"").slice(0,8))+")");
+  if(deploy) await doAct("/api/deploy",{compose:current},"deploy");
+  loadStacks();
+}
+
+// ---- History + diff ----
+async function renderHistory(){
+  const b=$("#tabbody");
+  const {data}=await api("/api/history?compose="+encodeURIComponent(current));
+  const items=data.items||[];
+  if(!items.length){ b.append(el("p","muted","No snapshots yet — deploy or save the compose to start history.")); return; }
+  const ul=el("ul","hist");
+  items.forEach((it,i)=>{ const li=el("li");
+    li.append(el("span","sha",(it.sha||"").slice(0,8)));
+    li.append(el("span","msg",it.message||""));
+    const dbtn=el("button","","Diff vs current"); dbtn.onclick=()=>showDiff(it.sha,null); li.append(dbtn);
+    if(i+1<items.length){ const pd=el("button","","Diff vs prev"); pd.onclick=()=>showDiff(items[i+1].sha,it.sha); li.append(pd); }
+    const rb=el("button","danger","Restore"); rb.onclick=()=>confirmAct("Restore this version? Current state is snapshotted first; you can then redeploy from Overview.","/api/restore",{compose:current,sha:it.sha},"restore "+(it.sha||"").slice(0,8)).then(()=>selectStack(current,true)); li.append(rb);
+    ul.append(li);
+  });
+  b.append(ul);
+  const dsec=el("section"); dsec.append(el("h3",null,"Diff")); const pre=el("pre","diff"); pre.id="diffout"; pre.append(el("span","dim","Pick a diff above.")); dsec.append(pre); b.append(dsec);
+}
+async function showDiff(from,to){
+  const pre=$("#diffout"); pre.innerHTML="Loading…";
+  let url="/api/diff?compose="+encodeURIComponent(current)+"&from="+encodeURIComponent(from); if(to)url+="&to="+encodeURIComponent(to);
+  const {data}=await api(url); pre.innerHTML="";
+  const d=(data.diff||"").trim(); if(!d){ pre.append(el("span","dim","(no differences)")); return; }
+  for(const line of d.split("\n")){ const cls=line.startsWith("+")&&!line.startsWith("+++")?"add":line.startsWith("-")&&!line.startsWith("---")?"del":line.startsWith("@@")||line.startsWith("diff ")?"hdr":""; pre.append(el("span",cls,line+"\n")); }
+}
+
+// ---- actions ----
+async function confirmAct(msg,path,body,label){ if(!confirm(msg))return; return doAct(path,body,label); }
+async function doAct(path,body,label){
+  logLine("cmd","▶ yd "+label);
+  const {data}=await post(path,body);
+  if(data.error){ logLine("bad","✗ "+data.error); return; }
+  if(data.stdout&&data.stdout.trim()) logLine("",data.stdout.trimEnd());
+  if(data.stderr&&data.stderr.trim()) logLine("dim",data.stderr.trimEnd());
+  if("ok" in data) logLine(data.ok?"ok":"bad",(data.ok?"✓ done":"✗ failed")+(data.exit!=null?" (exit "+data.exit+")":""));
+  loadStacks();
+}
+
+// ---- new stack ----
+$("#newstack").onclick=async ()=>{
+  const name=prompt("New stack name (a directory under the served root):"); if(!name)return;
+  const kind=(prompt("Workload kind (datastore/web/worker/cron/proxy) — or blank:","web")||"").trim();
+  const tmpl=kind?templateFor(kind,name):`services:\n  ${name}:\n    image: \n    restart: unless-stopped\n`;
+  const rel=name.replace(/\\/g,"/").replace(/\/+$/,"")+"/docker-compose.yml";
+  stacks.unshift({name,compose:rel,lifecycle:"draft",services:0,blocks:0,warns:0});
+  current=rel; tab="compose"; renderRail();
+  $("#main").innerHTML=""; detail={compose:rel,lifecycle:"draft",ready:true,blocks:0,warns:0,services:[],guardrails:[]}; renderShell();
+  setTimeout(()=>{ const ed=$("#editor"); if(ed){ ed.value=tmpl; validateEditor(); } },50);
+};
+function templateFor(kind,svc){
+  const img={datastore:"postgres:16",web:"nginx:1.27-alpine",proxy:"traefik:3.1",worker:"alpine:3.20",cron:"alpine:3.20"}[kind]||"alpine:3.20";
+  let y=`# kind: ${kind}\nservices:\n  ${svc}:\n    image: ${img}\n    restart: unless-stopped\n    mem_limit: 256m\n    healthcheck:\n      test: ["CMD", "true"]  # TODO real healthcheck\n      interval: 30s\n`;
+  if(kind==="datastore") y+=`    volumes:\n      - ${svc}-data:/var/lib/${svc}\nvolumes:\n  ${svc}-data:\n`;
+  return y;
+}
 loadStacks();
 </script>
 </body>

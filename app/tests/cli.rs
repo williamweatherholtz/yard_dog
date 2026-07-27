@@ -442,9 +442,12 @@ fn lifecycle_shows_default_and_transitions() {
 
 #[test]
 fn self_update_prints_current_version() {
+    // Offline-safe: self-update reports "yd <version>: <status>" whether or not
+    // the release host is reachable, so assert on the compiled-in version.
     let a = Command::cargo_bin("yd").unwrap().arg("self-update").assert().success();
     let out = String::from_utf8_lossy(&a.get_output().stdout).to_string();
-    assert!(out.contains("0.1.0"), "got:\n{out}");
+    assert!(out.contains(env!("CARGO_PKG_VERSION")), "got:\n{out}");
+    assert!(out.starts_with("yd "), "got:\n{out}");
 }
 
 #[test]
