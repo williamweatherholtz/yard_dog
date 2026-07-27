@@ -7,6 +7,7 @@ use crate::compose::RawMount;
 use crate::hostfs::{check_existence, ExistenceReport, HostFs, PathKind};
 use crate::ownership::detect_ownership;
 use crate::remediation::{remediations_for, Issue, Remediation};
+use std::collections::HashMap;
 
 /// The full analysis of one mount.
 #[derive(Debug, Clone)]
@@ -53,12 +54,13 @@ pub fn build_report(
     volumes: &dyn VolumeInspector,
     net: &dyn NetworkProbe,
     fs: &dyn HostFs,
-    expected: Option<(u32, u32)>,
+    ids_by_service: &HashMap<String, (u32, u32)>,
 ) -> Vec<MountReport> {
     mounts
         .iter()
         .map(|m| {
             let mount_type = classify(m, volumes, net);
+            let expected = ids_by_service.get(&m.service).copied();
             let mut existence = None;
             let mut issues = Vec::new();
 
@@ -159,10 +161,60 @@ mod tests {
             read_only: false,
             long_form: false,
         }];
-        let reports = build_report(&mounts, &NoVols, &LocalFsOnly, &MapFs(HashMap::new()), None);
+        let reports = build_report(
+            &mounts,
+            &NoVols,
+            &LocalFsOnly,
+            &MapFs(HashMap::new()),
+            &HashMap::new(),
+        );
         let text = render_text(&reports).to_lowercase();
         assert!(text.contains("host-bind"));
         assert!(text.contains("missing"));
         assert!(text.contains("create"));
+    }
+
+    struct MetaFs {
+        kind: PathKind,
+        meta: Option<crate::hostfs::PathMeta>,
+    }
+    impl HostFs for MetaFs {
+        fn kind(&self, _p: &str) -> PathKind {
+            self.kind
+        }
+        fn metadata(&self, _p: &str) -> Option<crate::hostfs::PathMeta> {
+            self.meta
+        }
+    }
+
+    #[test]
+    fn ownership_mismatch_flagged_from_service_ids() {
+        use crate::ownership::OwnershipIssue;
+        let mounts = vec![RawMount {
+            service: "app".into(),
+            source: Some("/srv/data".into()),
+            target: "/data".into(),
+            read_only: false,
+            long_form: false,
+        }];
+        let fs = MetaFs {
+            kind: PathKind::Directory,
+            meta: Some(crate::hostfs::PathMeta {
+                uid: 0,
+                gid: 0,
+                mode: 0o755,
+            }),
+        };
+        let ids = HashMap::from([("app".to_string(), (1000u32, 1000u32))]);
+
+        let reports = build_report(&mounts, &NoVols, &LocalFsOnly, &fs, &ids);
+        assert!(reports[0].issues.iter().any(|i| matches!(
+            i,
+            Issue::Ownership {
+                issue: OwnershipIssue::RootOwned,
+                ..
+            }
+        )));
+        assert!(render_text(&reports).to_lowercase().contains("chown"));
     }
 }

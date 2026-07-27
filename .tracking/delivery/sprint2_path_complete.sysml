@@ -21,6 +21,7 @@ package Sprint2PathComplete {
         :>> priority = WorkPriority::p1;
         :>> owner = "ai";
         :>> estimatedPoints = 5;
+        :>> actualPoints = 5;
     }
 
     // Charter lineage: the Needs this sprint advances.
@@ -32,14 +33,19 @@ package Sprint2PathComplete {
     // Backlog: tasks added via `keel add-task --def Sprint2Backlog`.
         action interpolationForms;
         verification interpolationFormsDoD : Test { :>> id = "d9e742f9-cb43-448d-a1c6-dc0aaccdb663"; :>> method = VerificationMethod::test; :>> procedureText = "Compose interpolation handles ${VAR:-default}, ${VAR-default}, and ${VAR:?err}; unit tests include ${CONFIG:-/opt/immich}/config resolving to the default when unset and to the value when set."; }
+        part interpolationFormsDoDR1 : TestResult { :>> id = "deac70ec-2fe0-4109-bea3-bb6eead7cf93"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "218f90f"; :>> judgedAt = "2026-07-26"; :>> judgedBy = "ai"; }
         action puidPgidFromCompose;
         verification puidPgidFromComposeDoD : Test { :>> id = "8f041151-7786-4301-a1c6-dc0aad8fd86f"; :>> method = VerificationMethod::test; :>> procedureText = "PUID/PGID are read from a service's environment (both list and map forms) and passed into ownership detection; a unit test flags a bind whose owner differs from the declared PUID/PGID."; }
+        part puidPgidFromComposeDoDR1 : TestResult { :>> id = "d4ef5b91-685d-4b81-9136-4e830588361b"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "218f90f"; :>> judgedAt = "2026-07-26"; :>> judgedBy = "ai"; }
         action networkMountDetection;
         verification networkMountDetectionDoD : Test { :>> id = "ef5e91bc-9007-459d-a1c6-dc0aae50d9cf"; :>> method = VerificationMethod::test; :>> procedureText = "Mount-table parsing is a pure function unit-tested against a fixture /proc/mounts: a bind path under an nfs/cifs mount classifies as network, one under ext4 does not."; }
+        part networkMountDetectionDoDR1 : TestResult { :>> id = "deac70ec-2fe0-420e-9837-bb5c5b4b0236"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "218f90f"; :>> judgedAt = "2026-07-26"; :>> judgedBy = "ai"; }
         action applyRemediation;
         verification applyRemediationDoD : Test { :>> id = "570e359f-e021-4e09-a1c6-dc0aaf0becd3"; :>> method = VerificationMethod::test; :>> procedureText = "A selected remediation (create-with-owner / chown / chmod) is applied ONLY on explicit confirmation; a recording-fixture test asserts no filesystem action without confirmation and the correct action with it."; }
+        part applyRemediationDoDR1 : TestResult { :>> id = "4c4ce26c-e9a9-4c2f-baa3-74b7915e5ec1"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "218f90f"; :>> judgedAt = "2026-07-26"; :>> judgedBy = "ai"; }
         action cliApply;
         verification cliApplyDoD : Test { :>> id = "7faaeeb8-bd20-4375-a1c6-dc0aafc4bcef"; :>> method = VerificationMethod::test; :>> procedureText = "yd applies confirmed remediations end-to-end; an integration test over a tempdir drives a confirmation and asserts the fix was applied, and that declining applies nothing."; }
+        part cliApplyDoDR1 : TestResult { :>> id = "cbc517af-3e1a-4e9c-b89d-573f6914cdfc"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "218f90f"; :>> judgedAt = "2026-07-26"; :>> judgedBy = "ai"; }
     action def Sprint2Backlog { }
 
     // This sprint's interpolation task resolves the logged compose-interpolation Issue.
@@ -48,4 +54,12 @@ package Sprint2PathComplete {
     // Refine/DoR gate.
     verification refineGate2 : Test { :>> id = "71b9dcf7-8c23-47ca-a303-614e915110b1"; :>> method = VerificationMethod::inspect; :>> procedureText = "Definition of Ready: estimatedPoints set (5); #CharteredBy edges set; scope/acceptance unambiguous; DoD tasks authored with method-tagged criteria; builds on the Sprint 1 path core."; }
     part refineGate2R1 : TestResult { :>> id = "e82b752d-d0ef-4401-a1d2-d0438b9060eb"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "5d1c8bd"; :>> judgedAt = "2026-07-26"; :>> judgedBy = "ai"; }
+
+    // Review gate — AI-judged inspection (decNoReviewSignoff: no human sign-off required).
+    verification reviewGate2 : Test { :>> id = "37a02684-edd4-4613-920f-4dea575ae8b8"; :>> method = VerificationMethod::inspect; :>> procedureText = "AI review: all 5 DoD tests green (22 lib + 2 integration, 0 warnings); the path pillar now applies fixes on explicit confirmation, reads PUID/PGID, detects network mounts, and handles ${VAR:-default} forms."; }
+    part reviewGate2R1 : TestResult { :>> id = "26016bf0-4c3d-4fd5-bf86-dba73069dcab"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "218f90f"; :>> judgedAt = "2026-07-26"; :>> judgedBy = "ai"; }
+
+    // CloseOut gate.
+    verification closeOutGate2 : Test { :>> id = "18c08129-21a1-41a7-b98a-633bf811444c"; :>> method = VerificationMethod::inspect; :>> procedureText = "CloseOut: 5/5 DoD tasks pass, review inspection passed, interpolation Issue resolved."; }
+    part closeOutGate2R1 : TestResult { :>> id = "6908004a-f34b-4f91-bf86-dba731793ee3"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "218f90f"; :>> judgedAt = "2026-07-26"; :>> judgedBy = "ai"; }
 }

@@ -4,9 +4,11 @@
 //! keeping the classification, existence, remediation, and reporting logic
 //! unit-testable on any platform against fixtures.
 
+pub mod apply;
 pub mod classify;
 pub mod compose;
 pub mod hostfs;
+pub mod mounttable;
 pub mod ownership;
 pub mod remediation;
 pub mod report;

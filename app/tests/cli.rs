@@ -45,3 +45,41 @@ fn inspect_reports_types_existence_and_remediation() {
         "a missing path should carry a create remediation; stdout was:\n{stdout}"
     );
 }
+
+#[test]
+fn fix_applies_missing_dir_only_when_confirmed() {
+    let dir = tempfile::tempdir().unwrap();
+    let compose = dir.path().join("docker-compose.yml");
+    std::fs::write(
+        &compose,
+        "services:\n  app:\n    volumes:\n      - ./newdir:/data\n",
+    )
+    .unwrap();
+
+    // dry run (no --yes): the directory must NOT be created
+    Command::cargo_bin("yd")
+        .unwrap()
+        .current_dir(dir.path())
+        .arg("fix")
+        .arg(compose.to_str().unwrap())
+        .assert()
+        .success();
+    assert!(
+        !dir.path().join("newdir").exists(),
+        "a dry-run fix must not create the host path"
+    );
+
+    // confirmed (--yes): the directory is created
+    Command::cargo_bin("yd")
+        .unwrap()
+        .current_dir(dir.path())
+        .arg("fix")
+        .arg(compose.to_str().unwrap())
+        .arg("--yes")
+        .assert()
+        .success();
+    assert!(
+        dir.path().join("newdir").exists(),
+        "a confirmed fix must create the missing host path"
+    );
+}
