@@ -22,9 +22,9 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             asset: yd-x86_64-windows.exe
-          - os: macos-13
-            target: x86_64-apple-darwin
-            asset: yd-x86_64-macos
+          # macOS Apple Silicon (arm64). Intel (x86_64-apple-darwin / macos-13)
+          # is omitted for now — GitHub's Intel-mac runners queue unreliably;
+          # add it back when needed.
           - os: macos-14
             target: aarch64-apple-darwin
             asset: yd-aarch64-macos
