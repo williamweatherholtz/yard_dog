@@ -98,7 +98,7 @@ Run `yd <command> --help` for full flags. Grouped by what they touch:
 | `yd import <compose> --into <dir> [--name <n>]` | Import an existing compose stack into a managed stacks directory. |
 | `yd pin add --repo <dir> --service <s>` / `yd pin list --repo <dir>` | Pin services to hold their updates. |
 | `yd notify --message <msg>` | Send a notification through the default (stdout) channel. |
-| `yd self-update` | Check whether a newer Yard Dog release is available. |
+| `yd self-update [--apply]` | Check for a newer release; with `--apply`, download it, verify its SHA256, and atomically replace the running binary. |
 
 ---
 

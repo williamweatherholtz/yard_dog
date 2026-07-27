@@ -1,0 +1,70 @@
+name: release
+
+# Cut a release by pushing a version tag, e.g. `git tag v0.1.0 && git push --tags`.
+# Builds native `yd` binaries per platform, publishes them with SHA256SUMS as a
+# GitHub Release — the artifacts `yd self-update` downloads and verifies.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: yd-x86_64-linux
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: yd-x86_64-windows.exe
+          - os: macos-13
+            target: x86_64-apple-darwin
+            asset: yd-x86_64-macos
+          - os: macos-14
+            target: aarch64-apple-darwin
+            asset: yd-aarch64-macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build
+        working-directory: app
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Stage asset
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "app/target/${{ matrix.target }}/release/yd.exe" "dist/${{ matrix.asset }}"
+          else
+            cp "app/target/${{ matrix.target }}/release/yd" "dist/${{ matrix.asset }}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: staging
+      - name: Collect binaries + checksums
+        shell: bash
+        run: |
+          mkdir -p dist
+          find staging -type f -exec cp {} dist/ \;
+          cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

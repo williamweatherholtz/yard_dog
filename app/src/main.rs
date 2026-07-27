@@ -146,8 +146,12 @@ enum Command {
         #[command(subcommand)]
         action: PinAction,
     },
-    /// Check whether a newer Yard Dog release is available.
-    SelfUpdate,
+    /// Check whether a newer Yard Dog release is available (or apply it).
+    SelfUpdate {
+        /// Download, verify (SHA256), and install the latest release in place.
+        #[arg(long)]
+        apply: bool,
+    },
     /// Serve the loopback-only browser control plane over the stacks under a root.
     Serve {
         /// Directory whose stacks the UI manages (defaults to the current dir).
@@ -260,7 +264,7 @@ fn main() {
         Command::Prune { dest, keep } => run_prune(&dest, keep),
         Command::Version { action } => run_version(action),
         Command::Pin { action } => run_pin(action),
-        Command::SelfUpdate => run_self_update(),
+        Command::SelfUpdate { apply } => run_self_update(apply),
         Command::Serve { root, port } => {
             yarddog::web::serve(port, std::path::Path::new(&root)).map_err(|e| e.to_string())
         }
@@ -643,18 +647,35 @@ fn run_push(from: &str, to: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn run_self_update() -> Result<(), String> {
-    // Placeholder release source: GitHub-release fetch + verified atomic replace
-    // land in a later increment. For now this reports detection only.
-    struct NoReleaseInfo;
-    impl yarddog::selfupdate::ReleaseSource for NoReleaseInfo {
-        fn latest_version(&self) -> Option<String> {
-            None
-        }
-    }
+/// The public repo self-update pulls releases from.
+const RELEASE_REPO: &str = "williamweatherholtz/yard_dog";
+
+fn run_self_update(apply: bool) -> Result<(), String> {
+    use yarddog::selfupdate::{check, perform_update, ApplyOutcome, GithubReleases, SelfUpdateStatus};
     let current = env!("CARGO_PKG_VERSION");
-    let status = yarddog::selfupdate::check(current, &NoReleaseInfo);
-    println!("yd {current}: {status:?}");
+    let gh = GithubReleases { repo: RELEASE_REPO.to_string() };
+
+    if !apply {
+        match check(current, &gh) {
+            SelfUpdateStatus::UpToDate => println!("yd {current}: up to date"),
+            SelfUpdateStatus::UpdateAvailable(v) => {
+                println!("yd {current}: update available -> {v}  (run `yd self-update --apply`)")
+            }
+            SelfUpdateStatus::Unknown => println!("yd {current}: could not reach {RELEASE_REPO} releases"),
+        }
+        return Ok(());
+    }
+
+    let exe = std::env::current_exe().map_err(|e| format!("cannot locate current exe: {e}"))?;
+    match perform_update(&gh, current, &exe).map_err(|e| format!("update failed: {e}"))? {
+        ApplyOutcome::UpToDate => println!("yd {current}: already up to date"),
+        ApplyOutcome::Updated { from, to, backup } => {
+            println!("updated yd {from} -> {to}  (previous binary kept at {})", backup.display());
+        }
+        ApplyOutcome::NoAsset(a) => return Err(format!("no release asset '{a}' for this platform")),
+        ApplyOutcome::ChecksumMismatch => return Err("SHA256 verification failed — refusing to install".into()),
+        ApplyOutcome::Unreachable => return Err(format!("could not reach {RELEASE_REPO} releases")),
+    }
     Ok(())
 }
 
