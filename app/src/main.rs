@@ -44,6 +44,12 @@ enum Command {
         #[arg(long)]
         dest: Option<String>,
     },
+    /// Verify a backup's integrity against its recorded manifest.
+    Verify {
+        /// Backup destination directory (must contain manifest.json).
+        #[arg(long)]
+        dest: String,
+    },
     /// Prune old backup snapshots in a destination, keeping the newest N.
     Prune {
         /// Backup destination directory (snapshots are subdirectories).
@@ -66,6 +72,7 @@ fn main() {
             run,
             dest,
         } => run_backup(&file, plan, run, dest.as_deref()),
+        Command::Verify { dest } => run_verify(&dest),
         Command::Prune { dest, keep } => run_prune(&dest, keep),
     };
     if let Err(e) = result {
@@ -143,14 +150,45 @@ fn run_backup(file: &str, plan: bool, run: bool, dest: Option<&str>) -> Result<(
         let manifest =
             yarddog::backup::execute_plan(&backup_plan, dest, true, &RealRunner, &RealArchiver)
                 .map_err(|e| format!("backup failed: {e}"))?;
+
+        // Record an integrity manifest so the backup can be verified later.
+        let integrity = yarddog::verify::build_manifest(std::path::Path::new(dest))
+            .map_err(|e| format!("manifesting {dest}: {e}"))?;
+        let json = serde_json::to_string_pretty(&integrity)
+            .map_err(|e| format!("serializing manifest: {e}"))?;
+        std::fs::write(std::path::Path::new(dest).join("manifest.json"), json)
+            .map_err(|e| format!("writing manifest: {e}"))?;
+
         println!(
-            "backed up to {dest}: dumps={:?} copies={:?}",
-            manifest.dumped, manifest.copied
+            "backed up to {dest}: dumps={:?} copies={:?} ({} files manifested)",
+            manifest.dumped,
+            manifest.copied,
+            integrity.entries.len()
         );
     } else if plan {
         print!("{}", yarddog::backup::render_plan(&backup_plan));
     } else {
         println!("Nothing to do — pass --plan to preview or --run --dest DIR to execute.");
+    }
+    Ok(())
+}
+
+fn run_verify(dest: &str) -> Result<(), String> {
+    let dir = std::path::Path::new(dest);
+    let manifest_path = dir.join("manifest.json");
+    let json = std::fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("reading {}: {e}", manifest_path.display()))?;
+    let manifest: yarddog::verify::Manifest =
+        serde_json::from_str(&json).map_err(|e| format!("parsing manifest: {e}"))?;
+    let findings = yarddog::verify::verify(dir, &manifest).map_err(|e| format!("verify failed: {e}"))?;
+    if findings.is_empty() {
+        println!("backup OK: {} file(s) intact", manifest.entries.len());
+    } else {
+        println!("backup INTEGRITY ISSUES ({}):", findings.len());
+        for f in &findings {
+            println!("  {f:?}");
+        }
+        std::process::exit(2);
     }
     Ok(())
 }

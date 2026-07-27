@@ -169,3 +169,49 @@ fn prune_keeps_newest_snapshots() {
     assert!(dir.path().join("2026-02").exists());
     assert!(dir.path().join("2026-03").exists());
 }
+
+#[test]
+fn verify_reports_clean_then_detects_corruption() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("data")).unwrap();
+    std::fs::write(dir.path().join("data").join("file.txt"), b"hello").unwrap();
+    let compose = dir.path().join("docker-compose.yml");
+    std::fs::write(
+        &compose,
+        "services:\n  app:\n    image: nginx\n    volumes:\n      - ./data:/x\n",
+    )
+    .unwrap();
+
+    // back up (writes manifest.json)
+    Command::cargo_bin("yd")
+        .unwrap()
+        .current_dir(dir.path())
+        .arg("backup")
+        .arg(compose.to_str().unwrap())
+        .arg("--run")
+        .arg("--dest")
+        .arg("bak")
+        .assert()
+        .success();
+
+    // a fresh backup verifies clean
+    Command::cargo_bin("yd")
+        .unwrap()
+        .current_dir(dir.path())
+        .arg("verify")
+        .arg("--dest")
+        .arg("bak")
+        .assert()
+        .success();
+
+    // tampering is detected (non-zero exit)
+    std::fs::write(dir.path().join("bak").join("data").join("file.txt"), b"tampered-and-longer").unwrap();
+    Command::cargo_bin("yd")
+        .unwrap()
+        .current_dir(dir.path())
+        .arg("verify")
+        .arg("--dest")
+        .arg("bak")
+        .assert()
+        .failure();
+}
