@@ -4,22 +4,28 @@
 //! (never a bare checkout leaving a detached/dirty tree).
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const BOT_NAME: &str = "Yard Dog";
 const BOT_EMAIL: &str = "noreply@yarddog.local";
 
-/// Opinionated ignore: config is versioned, data and secrets never are.
+/// Opinionated ignore: config is versioned, data and secrets never are. Data-dir
+/// names are anchored one level deep (`*/data/`) so, in the monorepo, a STACK
+/// named `data`/`db` at the root is still versioned while a stack's own data
+/// subdir is not; data FILES (.env, *.sqlite, *.db, secrets) are excluded anywhere.
 const GITIGNORE: &str = "# Yard Dog: never version data or secrets\n\
 .yd-backups/\n\
 .env\n\
 *.env\n\
 *.secret\n\
 secrets/\n\
-data/\n\
-db/\n\
-pgdata/\n\
+*/data/\n\
+*/db/\n\
+*/pgdata/\n\
+*/*/data/\n\
+*/*/db/\n\
+*/*/pgdata/\n\
 *.sqlite\n\
 *.sqlite3\n\
 *.db\n";
@@ -131,9 +137,128 @@ pub fn diff(dir: &Path, from: &str, to: Option<&str>) -> io::Result<String> {
     }
 }
 
+// ---- monorepo: path-scoped operations (decGitVersioning) --------------------
+// The versioning repo lives at the stacks ROOT; each stack's config is a subpath.
+// `rel` is the stack's path relative to the root ("." = the whole repo, which is
+// exactly the single-stack case — so these are drop-in supersets of the above).
+
+/// Convert a relative path into a git pathspec ("." for the repo itself).
+fn spec(rel: &Path) -> String {
+    let s = rel.to_string_lossy().replace('\\', "/");
+    if s.is_empty() || s == "." {
+        ".".to_string()
+    } else {
+        s
+    }
+}
+
+fn head(root: &Path) -> io::Result<String> {
+    Ok(git_ok(root, &["rev-parse", "HEAD"])?.trim().to_string())
+}
+
+/// The git repo root enclosing `start`, or `None` if `start` is not in a repo.
+pub fn repo_root(start: &Path) -> Option<PathBuf> {
+    let out = git_ok(start, &["rev-parse", "--show-toplevel"]).ok()?;
+    let p = out.trim();
+    if p.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(p))
+    }
+}
+
+/// Snapshot only the config under `rel` within the root repo. A no-op (nothing
+/// changed under `rel`) returns the current HEAD instead of failing.
+pub fn snapshot_scoped(root: &Path, rel: &Path, message: &str) -> io::Result<String> {
+    let sp = spec(rel);
+    git_ok(root, &["add", "-A", "--", &sp])?;
+    if git_ok(root, &["status", "--porcelain", "--", &sp])?.trim().is_empty() {
+        return head(root);
+    }
+    git_ok(root, &["commit", "-q", "-m", message, "--", &sp])?;
+    head(root)
+}
+
+/// History of the config under `rel`, newest-first.
+pub fn history_scoped(root: &Path, rel: &Path) -> io::Result<Vec<(String, String)>> {
+    let log = git_ok(root, &["log", "--pretty=format:%H%x09%s", "--", &spec(rel)])?;
+    Ok(log
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| {
+            let mut p = l.splitn(2, '\t');
+            (p.next().unwrap_or("").to_string(), p.next().unwrap_or("").to_string())
+        })
+        .collect())
+}
+
+/// Diff the config under `rel` between two points (`to = None` => working tree).
+pub fn diff_scoped(root: &Path, rel: &Path, from: &str, to: Option<&str>) -> io::Result<String> {
+    let sp = spec(rel);
+    match to {
+        Some(t) => git_ok(root, &["diff", from, t, "--", &sp]),
+        None => git_ok(root, &["diff", from, "--", &sp]),
+    }
+}
+
+/// Restore the config under `rel` to its state at `sha` (removing files added
+/// under `rel` after `sha`), recorded as a new commit. Returns the new sha.
+pub fn restore_scoped(root: &Path, rel: &Path, sha: &str) -> io::Result<String> {
+    let sp = spec(rel);
+    git_ok(root, &["checkout", sha, "--", &sp])?;
+    // Remove files under `rel` that are not present at `sha` (scoped stray-removal).
+    let in_target: std::collections::HashSet<String> =
+        git_ok(root, &["ls-tree", "-r", "--name-only", sha, "--", &sp])?
+            .lines()
+            .map(|l| l.to_string())
+            .collect();
+    let now: Vec<String> = git_ok(root, &["ls-files", "--", &sp])?.lines().map(|l| l.to_string()).collect();
+    for f in now.iter().filter(|f| !in_target.contains(*f)) {
+        git_ok(root, &["rm", "-f", "--", f])?;
+    }
+    git_ok(root, &["add", "-A", "--", &sp])?;
+    if git_ok(root, &["status", "--porcelain", "--", &sp])?.trim().is_empty() {
+        return head(root);
+    }
+    let short = &sha[..sha.len().min(12)];
+    git_ok(root, &["commit", "-q", "-m", &format!("restore to {short}"), "--", &sp])?;
+    head(root)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn monorepo_scoped_ops_isolate_stacks() {
+        // One repo at the root; two stacks a/ and b/ as subpaths.
+        let root = tempfile::tempdir().unwrap();
+        init(root.path()).unwrap();
+        std::fs::create_dir_all(root.path().join("a")).unwrap();
+        std::fs::create_dir_all(root.path().join("b")).unwrap();
+        std::fs::write(root.path().join("a/docker-compose.yml"), "image: nginx:1.27\n").unwrap();
+        std::fs::write(root.path().join("b/docker-compose.yml"), "image: redis:7\n").unwrap();
+        let a = std::path::Path::new("a");
+        let b = std::path::Path::new("b");
+
+        let a1 = snapshot_scoped(root.path(), a, "deploy a").unwrap();
+        let _b1 = snapshot_scoped(root.path(), b, "deploy b").unwrap();
+        std::fs::write(root.path().join("a/docker-compose.yml"), "image: nginx:1.29\n").unwrap();
+        snapshot_scoped(root.path(), a, "upgrade a").unwrap();
+
+        // history is per-stack
+        assert_eq!(history_scoped(root.path(), a).unwrap().len(), 2, "a has two commits");
+        assert_eq!(history_scoped(root.path(), b).unwrap().len(), 1, "b untouched by a's commits");
+        // diff is scoped to a
+        let d = diff_scoped(root.path(), a, &a1, None).unwrap();
+        assert!(d.contains("nginx:1.29"), "diff shows a's change");
+        // restoring a does not touch b
+        restore_scoped(root.path(), a, &a1).unwrap();
+        assert_eq!(std::fs::read_to_string(root.path().join("a/docker-compose.yml")).unwrap(), "image: nginx:1.27\n");
+        assert_eq!(std::fs::read_to_string(root.path().join("b/docker-compose.yml")).unwrap(), "image: redis:7\n", "b unchanged");
+        // repo_root finds the root from a subdir
+        assert!(repo_root(&root.path().join("a")).is_some());
+    }
 
     #[test]
     fn diff_shows_changes_between_snapshots() {

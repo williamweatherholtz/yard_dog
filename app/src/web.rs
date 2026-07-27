@@ -308,11 +308,15 @@ fn compose_text_json(root: &Path, rel: &str) -> Option<String> {
     Some(format!("{{\"yaml\":{}}}", json_escape(&yaml)))
 }
 
-/// `GET /api/history?compose=REL` — git snapshots for the stack, newest-first.
+/// The stack's path relative to the (mono)repo root, from a compose rel path.
+fn stack_rel(compose_rel: &str) -> PathBuf {
+    Path::new(compose_rel).parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// `GET /api/history?compose=REL` — snapshots for the stack, newest-first.
 fn history_json(root: &Path, rel: &str) -> Option<String> {
-    let p = safe_join(root, rel)?;
-    let dir = p.parent()?;
-    let items: Vec<String> = gitver::history(dir)
+    safe_join(root, rel)?; // reject paths outside root
+    let items: Vec<String> = gitver::history_scoped(root, &stack_rel(rel))
         .unwrap_or_default()
         .iter()
         .map(|(sha, msg)| format!("{{\"sha\":{},\"message\":{}}}", json_escape(sha), json_escape(msg)))
@@ -325,9 +329,8 @@ fn diff_json(root: &Path, query: &str) -> Option<String> {
     let rel = query_param(query, "compose")?;
     let from = query_param(query, "from")?;
     let to = query_param(query, "to");
-    let p = safe_join(root, &rel)?;
-    let dir = p.parent()?;
-    let d = gitver::diff(dir, &from, to.as_deref()).unwrap_or_default();
+    safe_join(root, &rel)?;
+    let d = gitver::diff_scoped(root, &stack_rel(&rel), &from, to.as_deref()).unwrap_or_default();
     Some(format!("{{\"diff\":{}}}", json_escape(&d)))
 }
 
@@ -505,12 +508,12 @@ fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
                 Some(d) => d.to_path_buf(),
                 None => return bad("bad path"),
             };
+            let sr = stack_rel(rel);
             let result = (|| -> std::io::Result<String> {
                 std::fs::create_dir_all(&dir)?;
                 std::fs::write(&abs, yaml)?;
-                gitver::ensure_repo(&dir)?;
-                let sha = gitver::snapshot(&dir, "yd ui edit")?;
-                Ok(sha)
+                gitver::ensure_repo(root)?;
+                gitver::snapshot_scoped(root, &sr, "yd ui edit")
             })();
             match result {
                 Ok(sha) => (200, format!("{{\"ok\":true,\"sha\":{}}}", json_escape(&sha))),
@@ -522,15 +525,14 @@ fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
             let (Some(rel), Some(sha)) = (field(&v, "compose"), field(&v, "sha")) else {
                 return bad("compose and sha required");
             };
-            let Some(abs) = safe_join(root, rel) else { return bad("path outside root") };
-            let dir = match abs.parent() {
-                Some(d) => d.to_path_buf(),
-                None => return bad("bad path"),
-            };
+            if safe_join(root, rel).is_none() {
+                return bad("path outside root");
+            }
+            let sr = stack_rel(rel);
             let result = (|| -> std::io::Result<String> {
-                gitver::ensure_repo(&dir)?;
-                gitver::snapshot(&dir, "yd ui pre-restore")?;
-                gitver::restore(&dir, sha)
+                gitver::ensure_repo(root)?;
+                gitver::snapshot_scoped(root, &sr, "yd ui pre-restore")?;
+                gitver::restore_scoped(root, &sr, sha)
             })();
             match result {
                 Ok(new_sha) => (200, format!("{{\"ok\":true,\"sha\":{}}}", json_escape(&new_sha))),
@@ -556,6 +558,9 @@ fn json_response(status: u16, body: String) -> Response<io::Cursor<Vec<u8>>> {
 /// Start the loopback control-plane server. Never binds anything but 127.0.0.1.
 pub fn serve(port: u16, root: &Path) -> io::Result<()> {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    // The served root IS the monorepo (decGitVersioning): one repo, per-stack
+    // snapshots scoped by path. Initialise it once on startup.
+    let _ = gitver::ensure_repo(&root);
     let server = Server::http(("127.0.0.1", port))
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("cannot bind 127.0.0.1:{port}: {e}")))?;
     println!("Yard Dog control plane on http://127.0.0.1:{port}  (loopback only — Ctrl-C to stop)");

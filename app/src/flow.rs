@@ -9,7 +9,7 @@ use crate::gitver;
 use crate::guardrails::{run_guardrails, verdict, Severity};
 use crate::upgrade::set_service_image;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The `docker compose up` args used for a health-gated deploy. `--wait` makes
 /// the deploy return only once containers are HEALTHY (not merely started), so
@@ -114,8 +114,18 @@ pub fn run(
         return Ok(Outcome::BackupFailed(e.to_string()));
     }
 
-    // Prior last-good = current HEAD, captured before the new snapshot.
-    let prior = gitver::history(change.repo)
+    // The stack's path within the (mono)repo root `change.repo`. When the repo IS
+    // the stack dir, this is "." and the scoped ops act on the whole repo (the
+    // single-stack case). Canonicalize both so it is robust across path forms.
+    let rel: PathBuf = (|| {
+        let repo = std::fs::canonicalize(change.repo).ok()?;
+        let sd = std::fs::canonicalize(stack_dir).ok()?;
+        sd.strip_prefix(&repo).ok().map(|p| p.to_path_buf())
+    })()
+    .unwrap_or_else(|| PathBuf::from("."));
+
+    // Prior last-good = the stack's current HEAD, captured before the new snapshot.
+    let prior = gitver::history_scoped(change.repo, &rel)
         .ok()
         .and_then(|h| h.first().map(|(sha, _)| sha.clone()));
 
@@ -126,7 +136,7 @@ pub fn run(
         set_service_image(change.compose_path, service, image)?;
     }
     trace.push(Phase::Snapshot);
-    gitver::snapshot(change.repo, "yd flow snapshot")?;
+    gitver::snapshot_scoped(change.repo, &rel, "yd flow snapshot")?;
 
     // Health-gate: the Deployer waits for containers to become HEALTHY; `Err`
     // means unhealthy/timed-out.
@@ -153,7 +163,7 @@ pub fn run(
         Err(e) => e.to_string(),
     };
     if let Some(good) = prior {
-        gitver::restore(change.repo, &good)?;
+        gitver::restore_scoped(change.repo, &rel, &good)?;
         if let Err(e) = deployer.deploy(stack_dir) {
             return Ok(Outcome::RegressFailed(format!(
                 "{reason}; rollback redeploy failed: {e}"

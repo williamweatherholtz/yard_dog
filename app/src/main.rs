@@ -483,12 +483,14 @@ fn announce_guardrails(compose: &std::path::Path) {
 fn run_deploy(file: &str, yes: bool) -> Result<(), String> {
     let compose = std::path::Path::new(file);
     let stack_dir = compose.parent().unwrap_or_else(|| std::path::Path::new("."));
-    // Version the stack directory itself (gitver's ignore excludes data/secrets/
-    // .yd-backups), initialising it on first use so snapshots capture the actual
-    // compose and a rollback can restore it.
-    yarddog::gitver::ensure_repo(stack_dir).map_err(|e| format!("cannot init versioning repo: {e}"))?;
+    // Version at the (mono)repo root: use the enclosing git repo if there is one
+    // (e.g. the `yd serve --root` monorepo), else make the stack dir its own repo.
+    // gitver's ignore excludes data/secrets/.yd-backups; snapshots are path-scoped
+    // to the stack so a rollback restores only it.
+    let root = yarddog::gitver::repo_root(stack_dir).unwrap_or_else(|| stack_dir.to_path_buf());
+    yarddog::gitver::ensure_repo(&root).map_err(|e| format!("cannot init versioning repo: {e}"))?;
     announce_guardrails(compose);
-    let outcome = yarddog::deploy::safe_deploy(compose, stack_dir, yes, &RealBackupHook, &RealDeployer)
+    let outcome = yarddog::deploy::safe_deploy(compose, &root, yes, &RealBackupHook, &RealDeployer)
         .map_err(|e| format!("deploy failed: {e}"))?;
     println!("deploy: {outcome:?}");
     if matches!(outcome, yarddog::deploy::DeployOutcome::BackupFailed(_)) {
@@ -511,13 +513,16 @@ fn run_upgrade(
     image: &str,
     yes: bool,
 ) -> Result<(), String> {
-    // --yes proceeds and auto-accepts on a passing healthcheck.
-    yarddog::gitver::ensure_repo(std::path::Path::new(repo))
+    // --yes proceeds and auto-accepts on a passing healthcheck. Version at the
+    // enclosing (mono)repo root if one exists, else at the given --repo dir.
+    let repo_path = std::path::Path::new(repo);
+    let root = yarddog::gitver::repo_root(repo_path).unwrap_or_else(|| repo_path.to_path_buf());
+    yarddog::gitver::ensure_repo(&root)
         .map_err(|e| format!("cannot init versioning repo: {e}"))?;
     announce_guardrails(std::path::Path::new(file));
     let outcome = yarddog::upgrade::safe_upgrade(
         std::path::Path::new(file),
-        std::path::Path::new(repo),
+        &root,
         service,
         image,
         yes,
