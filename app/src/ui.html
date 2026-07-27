@@ -211,11 +211,13 @@ function renderOverview(){
   b.append(isec);
   // services + status
   const ssec=el("section"); ssec.append(el("h3",null,"Services"));
-  const tbl=el("table"); const hr=el("tr"); ["Service","Image","Kind","Status",""].forEach(h=>hr.append(el("th",null,h))); tbl.append(hr);
+  const tbl=el("table"); const hr=el("tr"); ["Service","Image","Kind","Status","CPU","Mem",""].forEach(h=>hr.append(el("th",null,h))); tbl.append(hr);
   for(const s of detail.services){ const tr=el("tr");
     tr.append(el("td",null,s.name)); tr.append(el("td","img",s.image||"—"));
     const kd=el("td"); kd.append(el("span","kind "+s.kind,s.kind)); tr.append(kd);
     const st=el("td","status"); st.dataset.svc=s.name; st.append(el("span","dim","—")); tr.append(st);
+    const cp=el("td","cpu img"); cp.dataset.svc=s.name; cp.textContent="—"; tr.append(cp);
+    const mm=el("td","mem img"); mm.dataset.svc=s.name; mm.textContent="—"; tr.append(mm);
     const up=el("td"); const ub=el("button","","Upgrade…"); ub.onclick=()=>{const img=prompt(`New image for “${s.name}” (now: ${s.image||"?"}):`,s.image||""); if(img&&img!==s.image)confirmAct(`Upgrade ${s.name} to ${img}?`,"/api/upgrade",{compose:current,service:s.name,image:img},"upgrade "+s.name);}; up.append(ub); tr.append(up);
     tbl.append(tr);
   }
@@ -225,8 +227,10 @@ function renderOverview(){
 function chip(cls,text,title){const s=el("span","stchip "+cls,text); if(title)s.title=title; return s;}
 async function refreshStatus(){
   document.querySelectorAll("td.status").forEach(td=>{td.innerHTML=""; const s=el("span"); s.innerHTML='<span class="spin"></span>'; td.append(s);});
-  const [drift,upd]=await Promise.all([api("/api/drift?compose="+encodeURIComponent(current)).then(r=>r.data).catch(()=>({})),api("/api/updates?compose="+encodeURIComponent(current)).then(r=>r.data).catch(()=>({}))]);
-  const db={},ub={}; (drift.items||[]).forEach(i=>db[i.service]=i); (upd.items||[]).forEach(i=>ub[i.service]=i);
+  const [drift,upd,st]=await Promise.all([api("/api/drift?compose="+encodeURIComponent(current)).then(r=>r.data).catch(()=>({})),api("/api/updates?compose="+encodeURIComponent(current)).then(r=>r.data).catch(()=>({})),api("/api/stats?compose="+encodeURIComponent(current)).then(r=>r.data).catch(()=>({}))]);
+  const db={},ub={},sb={}; (drift.items||[]).forEach(i=>db[i.service]=i); (upd.items||[]).forEach(i=>ub[i.service]=i); (st.items||[]).forEach(i=>sb[i.service]=i);
+  document.querySelectorAll("td.cpu").forEach(td=>{const s=sb[td.dataset.svc]; td.textContent=(s&&s.cpu)||"—";});
+  document.querySelectorAll("td.mem").forEach(td=>{const s=sb[td.dataset.svc]; td.textContent=(s&&s.mem)||"—";});
   document.querySelectorAll("td.status").forEach(td=>{const svc=td.dataset.svc; td.innerHTML="";
     if(drift.available===false) td.append(chip("dim","drift ?","running-state unavailable"));
     else { const di=db[svc]; if(!di)td.append(chip("ok","in sync")); else if(di.kind==="changed")td.append(chip("attn","drift",(di.declared||"")+" → "+(di.running||""))); else if(di.kind==="missing")td.append(chip("bad","not running")); else td.append(chip("attn",di.kind)); }

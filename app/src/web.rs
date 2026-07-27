@@ -13,7 +13,7 @@ use crate::classify::{MountType, NetworkProbe, VolumeInfo, VolumeInspector};
 use crate::drift::{self, DriftKind};
 use crate::lifecycle::LifecycleState;
 use crate::remediation::Issue;
-use crate::{compose, gitver, guardrails, hostfs, lifecycle, preflight, registry, report, stacks, updates, verify, workload};
+use crate::{compose, gitver, guardrails, hostfs, lifecycle, preflight, registry, report, stacks, stats, updates, verify, workload};
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -283,6 +283,21 @@ fn backups_json(root: &Path, rel: &str) -> Option<String> {
             }
         }
     }
+    Some(format!("{{\"items\":[{}]}}", items.join(",")))
+}
+
+/// `GET /api/stats?compose=REL` — per-service live CPU/memory (docker stats).
+fn stats_json(root: &Path, rel: &str) -> Option<String> {
+    let p = safe_join(root, rel)?;
+    let names = drift::running_names_via_docker(&p).unwrap_or_default();
+    let by_name = stats::stats_via_docker(&names.values().cloned().collect::<Vec<_>>());
+    let items: Vec<String> = names
+        .iter()
+        .map(|(svc, name)| {
+            let (cpu, mem) = by_name.get(name).map(|s| (s.cpu.clone(), s.mem.clone())).unwrap_or_default();
+            format!("{{\"service\":{},\"cpu\":{},\"mem\":{}}}", json_escape(svc), json_escape(&cpu), json_escape(&mem))
+        })
+        .collect();
     Some(format!("{{\"items\":[{}]}}", items.join(",")))
 }
 
@@ -603,6 +618,10 @@ pub fn serve(port: u16, root: &Path) -> io::Result<()> {
                 None => json_response(400, "{\"error\":\"compose required or outside root\"}".into()),
             },
             (Method::Get, "/api/backups") => match query_param(&query, "compose").and_then(|r| backups_json(&root, &r)) {
+                Some(b) => json_response(200, b),
+                None => json_response(400, "{\"error\":\"compose required or outside root\"}".into()),
+            },
+            (Method::Get, "/api/stats") => match query_param(&query, "compose").and_then(|r| stats_json(&root, &r)) {
                 Some(b) => json_response(200, b),
                 None => json_response(400, "{\"error\":\"compose required or outside root\"}".into()),
             },

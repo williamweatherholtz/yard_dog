@@ -22,6 +22,39 @@ pub fn running_images_via_docker(compose: &Path) -> Option<HashMap<String, Strin
     Some(parse_compose_ps(&String::from_utf8_lossy(&out.stdout)))
 }
 
+/// Running service -> container-name map, via `docker compose ps`.
+pub fn running_names_via_docker(compose: &Path) -> Option<HashMap<String, String>> {
+    let out = std::process::Command::new("docker")
+        .args(["compose", "-f"])
+        .arg(compose)
+        .args(["ps", "--format", "json"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut map = HashMap::new();
+    let mut insert = |v: &serde_json::Value| {
+        if let (Some(svc), Some(name)) = (v.get("Service").and_then(|x| x.as_str()), v.get("Name").and_then(|x| x.as_str())) {
+            map.insert(svc.to_string(), name.to_string());
+        }
+    };
+    let trimmed = text.trim();
+    if let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        for it in &items {
+            insert(it);
+        }
+    } else {
+        for line in trimmed.lines().filter(|l| !l.trim().is_empty()) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                insert(&v);
+            }
+        }
+    }
+    Some(map)
+}
+
 /// Parse `docker compose ps --format json` output (newline-delimited JSON
 /// objects, or a JSON array) into a running service->image map. Pure over the
 /// text so the docker shell-out stays a thin adapter.
