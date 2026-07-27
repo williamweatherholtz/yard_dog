@@ -407,3 +407,30 @@ fn drift_runs_and_lists_declared_services() {
     let out = String::from_utf8_lossy(&a.get_output().stdout).to_string();
     assert!(out.contains("app"), "got:\n{out}");
 }
+
+#[test]
+fn upgrade_dry_run_leaves_compose_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("docker-compose.yml");
+    std::fs::write(&f, "services:\n  app:\n    image: nginx:1.27\n").unwrap();
+
+    // no --yes => Skipped => no change
+    Command::cargo_bin("yd")
+        .unwrap()
+        .args([
+            "upgrade",
+            f.to_str().unwrap(),
+            "--repo",
+            dir.path().to_str().unwrap(),
+            "--service",
+            "app",
+            "--image",
+            "nginx:1.29",
+        ])
+        .assert()
+        .success();
+
+    let content = std::fs::read_to_string(&f).unwrap();
+    assert!(content.contains("nginx:1.27"), "unchanged; got:\n{content}");
+    assert!(!content.contains("nginx:1.29"), "dry run must not apply the image");
+}

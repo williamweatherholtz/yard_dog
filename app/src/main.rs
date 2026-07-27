@@ -72,6 +72,23 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Safely upgrade a service's image: back up, snapshot, deploy, regress-or-accept.
+    Upgrade {
+        /// Path to the docker-compose file.
+        file: String,
+        /// Git versioning repo (usually the stacks root).
+        #[arg(long)]
+        repo: String,
+        /// Service to upgrade.
+        #[arg(long)]
+        service: String,
+        /// Target image (e.g. nginx:1.29).
+        #[arg(long)]
+        image: String,
+        /// Proceed and auto-accept on a passing healthcheck. Without this it is a no-op.
+        #[arg(long)]
+        yes: bool,
+    },
     /// List the compose stacks discovered under a root directory.
     Stacks {
         /// Root directory to scan (each stack is a subdirectory with a compose file).
@@ -193,6 +210,13 @@ fn main() {
             dest,
         } => run_backup(&file, plan, run, dest.as_deref()),
         Command::Deploy { file, yes } => run_deploy(&file, yes),
+        Command::Upgrade {
+            file,
+            repo,
+            service,
+            image,
+            yes,
+        } => run_upgrade(&file, &repo, &service, &image, yes),
         Command::Stacks { root } => run_stacks(&root),
         Command::Import { file, into, name } => run_import(&file, &into, name.as_deref()),
         Command::Notify { message } => run_notify(&message),
@@ -397,6 +421,29 @@ fn run_deploy(file: &str, yes: bool) -> Result<(), String> {
     if matches!(outcome, yarddog::deploy::DeployOutcome::BackupFailed(_)) {
         std::process::exit(2);
     }
+    Ok(())
+}
+
+fn run_upgrade(
+    file: &str,
+    repo: &str,
+    service: &str,
+    image: &str,
+    yes: bool,
+) -> Result<(), String> {
+    // --yes proceeds and auto-accepts on a passing healthcheck.
+    let outcome = yarddog::upgrade::safe_upgrade(
+        std::path::Path::new(file),
+        std::path::Path::new(repo),
+        service,
+        image,
+        yes,
+        yes,
+        &RealBackupHook,
+        &RealDeployer,
+    )
+    .map_err(|e| format!("upgrade failed: {e}"))?;
+    println!("upgrade: {outcome:?}");
     Ok(())
 }
 

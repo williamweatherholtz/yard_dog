@@ -19,6 +19,17 @@ package YardDogUpdateNeeds {
         :>> priority = Priority::should;
     }
 
+    requirement needSafeUpgrade : Need {
+        :>> id = "fd242158-a538-420d-a100-f0786b7a945d";
+        :>> title = "One-shot safe upgrade: back up, attempt, health-gate, regress or accept";
+        :>> createdAt = "2026-07-27";
+        :>> createdBy = "wweatherholtz";
+        :>> source = NeedSource::operator;
+        :>> statement = "The operator can upgrade a service to a target image through one orchestrated, safe flow: back up its data and snapshot its config, apply the new image, and then automatically regress to the last-good state if the healthcheck fails — and, when it passes, either auto-accept the upgrade or hold it for explicit user acceptance, regressing if the user rejects it even though it is healthy.";
+        :>> marketJustification = "Addresses the headline self-hosting fear ('I upgraded and it broke and couldn't get back'). Assessed valuable and FEASIBLE by composition: pre-change backup, git config snapshot, deploy + healthcheck-gated auto-rollback, and kind-aware update detection are already built ([[needPreChangeBackup]], [[needSafeDeploy]], [[needContainerAutoUpdate]]); the only genuinely-new pieces are rewriting a service's image and the accept/regress-even-if-healthy branch — low added complexity.";
+        :>> priority = Priority::should;
+    }
+
     requirement needContainerAutoUpdate : Need {
         :>> id = "ea89704e-558f-46a3-b599-0fbd67df1f6f";
         :>> title = "Detect and safely auto-apply container image updates";

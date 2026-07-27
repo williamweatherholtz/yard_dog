@@ -23,6 +23,7 @@ pub mod selfupdate;
 pub mod stacks;
 pub mod transport;
 pub mod updates;
+pub mod upgrade;
 pub mod workload;
 pub mod verify;
 
