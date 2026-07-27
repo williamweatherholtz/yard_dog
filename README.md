@@ -100,6 +100,7 @@ Run `yd <command> --help` for full flags. Grouped by what they touch:
 | `yd notify --message <msg>` | Send a notification through the default (stdout) channel. |
 | `yd self-update [--apply]` | Check for a newer release; with `--apply`, download it, verify its SHA256, and atomically replace the running binary. |
 | `yd git remote/push/pull/status --repo <dir>` | Connect and sync the config monorepo with a git remote (auth via your system git). |
+| `yd fleet status/check/backup --root <dir>` | Act across every stack under a root — summary, preflight-all, or backup-all. |
 
 ---
 
@@ -140,8 +141,11 @@ a tabbed detail view:
 - **History** — the git snapshot timeline with a unified **diff** viewer and one-click
   **restore** of a past version.
 
-(Mounts, Permissions, Backups, and Logs tabs are on the roadmap.) Every action runs
-through the same guarded path (guardrails → backup → health-gate → rollback).
+Every action runs through the same guarded path (guardrails → backup → health-gate
+→ rollback). A global **Fleet** view (header) gives a single pane across all stacks
+with an attention badge, fleet-wide **check-all / back-up-all**, and one-click
+**adoption** of newly-discovered stacks; each per-stack detail also has **Mounts**,
+**Permissions/compliance**, **Backups**, and **Logs** tabs.
 
 Config is versioned in a single **monorepo** at the served root; the header **Git**
 panel connects a remote and pushes/pulls all your config offsite in one action,

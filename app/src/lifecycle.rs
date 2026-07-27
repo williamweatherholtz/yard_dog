@@ -74,6 +74,12 @@ fn state_path(dir: &Path) -> PathBuf {
     dir.join(".yd-lifecycle")
 }
 
+/// Whether this stack is managed by Yard Dog — i.e. its lifecycle has been set
+/// explicitly (a discovered-but-unadopted stack has no state file yet).
+pub fn is_managed(dir: &Path) -> bool {
+    state_path(dir).exists()
+}
+
 /// Read the persisted state, defaulting to Draft when unset/unreadable.
 pub fn read_state(dir: &Path) -> LifecycleState {
     std::fs::read_to_string(state_path(dir))
@@ -136,6 +142,14 @@ mod tests {
         let err = transition(dir.path(), Restore).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(read_state(dir.path()), Draft, "state must be unchanged after a rejected transition");
+    }
+
+    #[test]
+    fn is_managed_reflects_explicit_state() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_managed(dir.path()), "a discovered-but-unadopted stack is unmanaged");
+        write_state(dir.path(), Active).unwrap();
+        assert!(is_managed(dir.path()), "setting state marks it managed");
     }
 
     #[test]

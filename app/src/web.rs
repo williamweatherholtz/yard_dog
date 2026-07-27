@@ -385,13 +385,14 @@ fn stacks_json(root: &Path) -> String {
             let blocks = findings.iter().filter(|f| f.severity == guardrails::Severity::Block).count();
             let warns = findings.iter().filter(|f| f.severity == guardrails::Severity::Warn).count();
             format!(
-                "{{\"name\":{},\"compose\":{},\"lifecycle\":{},\"services\":{},\"blocks\":{},\"warns\":{}}}",
+                "{{\"name\":{},\"compose\":{},\"lifecycle\":{},\"services\":{},\"blocks\":{},\"warns\":{},\"adopted\":{}}}",
                 json_escape(&s.name),
                 json_escape(&rel),
                 json_escape(state.as_str()),
                 n,
                 blocks,
-                warns
+                warns,
+                lifecycle::is_managed(dir)
             )
         })
         .collect();
@@ -567,6 +568,53 @@ fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
             })();
             match result {
                 Ok(new_sha) => (200, format!("{{\"ok\":true,\"sha\":{}}}", json_escape(&new_sha))),
+                Err(e) => (200, format!("{{\"ok\":false,\"error\":{}}}", json_escape(&e.to_string()))),
+            }
+        }
+        // Fleet fan-out: run each discovered stack through the per-stack guarded
+        // CLI path (sequential, to avoid docker contention). sub = "backup"|"check".
+        "/api/fleet/backup" | "/api/fleet/check" => {
+            let sub = if path.ends_with("backup") { "backup" } else { "doctor" };
+            let stacks = stacks::discover_stacks(root).unwrap_or_default();
+            let yd = yd_bin();
+            let results: Vec<String> = stacks
+                .iter()
+                .map(|s| {
+                    let compose = s.compose_path.to_string_lossy().to_string();
+                    let args: Vec<String> = if sub == "backup" {
+                        vec!["backup".into(), compose, "--run".into(), "--dest".into(), ".yd-backups".into()]
+                    } else {
+                        vec!["doctor".into(), compose]
+                    };
+                    let out = std::process::Command::new(&yd).args(&args).output();
+                    let (ok, tail) = match out {
+                        Ok(o) => (
+                            o.status.success(),
+                            String::from_utf8_lossy(&o.stdout).lines().last().unwrap_or("").to_string(),
+                        ),
+                        Err(e) => (false, e.to_string()),
+                    };
+                    format!("{{\"stack\":{},\"ok\":{},\"summary\":{}}}", json_escape(&s.name), ok, json_escape(&tail))
+                })
+                .collect();
+            (200, format!("{{\"results\":[{}]}}", results.join(",")))
+        }
+        // Adopt a discovered stack: set Draft lifecycle (if unset) + initial snapshot.
+        "/api/adopt" => {
+            let Some(rel) = field(&v, "compose") else { return bad("compose required") };
+            let Some(abs) = safe_join(root, rel) else { return bad("path outside root") };
+            let Some(dir) = abs.parent() else { return bad("bad path") };
+            let sr = stack_rel(rel);
+            let result = (|| -> std::io::Result<()> {
+                if !lifecycle::is_managed(dir) {
+                    lifecycle::write_state(dir, LifecycleState::Draft)?;
+                }
+                gitver::ensure_repo(root)?;
+                gitver::snapshot_scoped(root, &sr, "yd adopt")?;
+                Ok(())
+            })();
+            match result {
+                Ok(()) => (200, "{\"ok\":true}".into()),
                 Err(e) => (200, format!("{{\"ok\":false,\"error\":{}}}", json_escape(&e.to_string()))),
             }
         }

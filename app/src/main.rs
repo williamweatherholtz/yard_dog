@@ -151,6 +151,11 @@ enum Command {
         #[command(subcommand)]
         action: GitAction,
     },
+    /// Act across every stack under a root (status / check / backup).
+    Fleet {
+        #[command(subcommand)]
+        action: FleetAction,
+    },
     /// Check whether a newer Yard Dog release is available (or apply it).
     SelfUpdate {
         /// Download, verify (SHA256), and install the latest release in place.
@@ -218,6 +223,25 @@ enum GitAction {
     Status {
         #[arg(long)]
         repo: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum FleetAction {
+    /// Lifecycle + guardrail-issue summary for every stack.
+    Status {
+        #[arg(long)]
+        root: String,
+    },
+    /// Preflight (READY/NOT READY) every stack.
+    Check {
+        #[arg(long)]
+        root: String,
+    },
+    /// Back up every stack to its .yd-backups.
+    Backup {
+        #[arg(long)]
+        root: String,
     },
 }
 
@@ -297,6 +321,7 @@ fn main() {
         Command::Version { action } => run_version(action),
         Command::Pin { action } => run_pin(action),
         Command::Git { action } => run_git(action),
+        Command::Fleet { action } => run_fleet(action),
         Command::SelfUpdate { apply } => run_self_update(apply),
         Command::Serve { root, port } => {
             yarddog::web::serve(port, std::path::Path::new(&root)).map_err(|e| e.to_string())
@@ -767,6 +792,41 @@ fn run_lifecycle(repo: &str, event: Option<&str>) -> Result<(), String> {
         }
     };
     println!("lifecycle: {}", state.as_str());
+    Ok(())
+}
+
+fn run_fleet(action: FleetAction) -> Result<(), String> {
+    let scan = |root: &str| yarddog::stacks::discover_stacks(std::path::Path::new(root)).unwrap_or_default();
+    match action {
+        FleetAction::Status { root } => {
+            for s in scan(&root) {
+                let dir = s.compose_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+                let state = yarddog::lifecycle::read_state(dir);
+                let yaml = std::fs::read_to_string(&s.compose_path).unwrap_or_default();
+                let f = yarddog::guardrails::run_guardrails(&yaml);
+                let blocks = f.iter().filter(|x| x.severity == yarddog::guardrails::Severity::Block).count();
+                let warns = f.iter().filter(|x| x.severity == yarddog::guardrails::Severity::Warn).count();
+                println!("{:<20} {:<11} {} block(s), {} warning(s)", s.name, state.as_str(), blocks, warns);
+            }
+        }
+        FleetAction::Check { root } => {
+            for s in scan(&root) {
+                let dir = s.compose_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+                let yaml = std::fs::read_to_string(&s.compose_path).unwrap_or_default();
+                let p = yarddog::preflight::assess(&yaml, yarddog::lifecycle::read_state(dir));
+                println!("{:<20} {}", s.name, if p.ready { "READY" } else { "NOT READY" });
+            }
+        }
+        FleetAction::Backup { root } => {
+            for s in scan(&root) {
+                print!("{}: ", s.name);
+                match run_backup(&s.compose_path.to_string_lossy(), false, true, Some(".yd-backups")) {
+                    Ok(()) => {}
+                    Err(e) => println!("failed — {e}"),
+                }
+            }
+        }
+    }
     Ok(())
 }
 

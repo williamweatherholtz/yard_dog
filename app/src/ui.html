@@ -38,6 +38,7 @@
   button.primary { background:var(--accent); color:#17150f; border-color:var(--accent); font-weight:600; }
   button.danger { border-color:color-mix(in srgb,var(--bad) 45%,var(--line)); color:var(--bad); }
   button.danger:hover { background:color-mix(in srgb,var(--bad) 12%,transparent); }
+  button#notif.attn { border-color:var(--bad); color:var(--bad); background:color-mix(in srgb,var(--bad) 12%,transparent); }
   button:disabled { opacity:.45; cursor:not-allowed; }
   .layout { display:grid; grid-template-columns:290px 1fr; min-height:calc(100vh - 58px); }
   @media (max-width:820px){ .layout{ grid-template-columns:1fr; } }
@@ -119,6 +120,8 @@
   <div class="brand"><span class="paw">◕</span> Yard&nbsp;Dog <small>control plane</small></div>
   <div class="spacer"></div>
   <span class="loopback">🔒 <b>loopback</b> · 127.0.0.1</span>
+  <button id="fleet" title="Fleet overview">▦ Fleet</button>
+  <button id="notif" title="Stacks needing attention" style="display:none">🔔 <span id="notifn">0</span></button>
   <button id="git" title="Git remote sync">⇅ Git</button>
   <button id="theme" title="Toggle theme" aria-label="Toggle theme">◐</button>
 </header>
@@ -146,7 +149,12 @@ async function post(path,body){return api(path,{method:"POST",headers:{"Content-
 
 async function loadStacks(){
   const box=$("#stacks"); const {data}=await api("/api/stacks"); stacks=data.stacks||[];
-  renderRail();
+  renderRail(); updateNotif();
+}
+function updateNotif(){
+  const n=stacks.filter(s=>s.blocks>0).length;
+  const btn=$("#notif"); $("#notifn").textContent=n; btn.style.display=n?"":"none";
+  btn.classList.toggle("attn",n>0);
 }
 function renderRail(){
   const box=$("#stacks"); box.innerHTML=""; const f=$("#filter").value.toLowerCase();
@@ -351,6 +359,53 @@ async function loadLogs(){
   const {data}=await api("/api/logs?compose="+encodeURIComponent(current)+"&tail=200");
   pre.innerHTML=""; const out=((data.stdout||"")+(data.stderr||"")).trim();
   pre.append(el("span",out?"":"dim",out||"(no output — is the stack running?)"));
+}
+
+// ---- Fleet overview (across all stacks) ----
+$("#fleet").onclick=()=>renderFleet(false);
+$("#notif").onclick=()=>renderFleet(true);
+async function renderFleet(attentionOnly){
+  current=null; renderRail();
+  await loadStacks(); // refresh cheap status
+  const m=$("#main"); m.innerHTML="";
+  m.append(el("h1",null,attentionOnly?"Needs attention":"Fleet"));
+  m.append(el("div","path",`${stacks.length} stack${stacks.length===1?"":"s"} under the served root · bulk actions run each through the guarded per-stack path`));
+  const bar=el("div","actionbar"); const b=(l,cls,fn)=>{const x=el("button",cls,l);x.onclick=fn;bar.append(x);};
+  b("Check all","",()=>doFleet("/api/fleet/check","check"));
+  b("Back up all","",()=>confirm("Back up every stack?")&&doFleet("/api/fleet/backup","backup"));
+  const unadopted=stacks.filter(s=>!s.adopted);
+  if(unadopted.length) b(`Adopt all (${unadopted.length})`,"primary",async()=>{ for(const s of unadopted){ await post("/api/adopt",{compose:s.compose}); } logLine("ok","✓ adopted "+unadopted.length+" stack(s)"); renderFleet(attentionOnly); });
+  m.append(bar);
+  const rows=stacks.filter(s=>!attentionOnly||s.blocks>0||!s.adopted);
+  const tbl=el("table"); const hr=el("tr"); ["Stack","Lifecycle","Issues","Managed","Status",""].forEach(h=>hr.append(el("th",null,h))); tbl.append(hr);
+  for(const s of rows){ const tr=el("tr");
+    const nm=el("td"); const link=el("button","",s.name); link.style.padding="2px 0"; link.style.border="none"; link.style.background="none"; link.onclick=()=>selectStack(s.compose); nm.append(link); tr.append(nm);
+    const lc=el("td"); lc.append(el("span","chip "+s.lifecycle,s.lifecycle)); tr.append(lc);
+    const iss=el("td"); if(s.blocks>0)iss.append(el("span","badge-issue block",s.blocks+"⚠")); else if(s.warns>0)iss.append(el("span","badge-issue warn",s.warns)); else iss.append(el("span","badge-issue ok","✓")); tr.append(iss);
+    const mg=el("td"); mg.append(s.adopted?el("span","stchip ok","managed"):el("span","stchip attn","unadopted")); tr.append(mg);
+    const st=el("td","fstat"); st.dataset.compose=s.compose; st.append(el("span","dim","—")); tr.append(st);
+    const act=el("td"); if(!s.adopted){ const ab=el("button","","Adopt"); ab.onclick=()=>post("/api/adopt",{compose:s.compose}).then(()=>{logLine("ok","✓ adopted "+s.name);renderFleet(attentionOnly);}); act.append(ab);} tr.append(act);
+    tbl.append(tr);
+  }
+  m.append(tbl);
+  const c=el("section","console"); c.append(el("h3",null,"Output")); const pre=el("pre"); pre.id="console"; pre.append(el("span","dim","Bulk action results appear here.")); c.append(pre); m.append(c);
+  // lazily load expensive status (drift/updates) per row
+  for(const s of rows) loadFleetStatus(s.compose);
+}
+async function loadFleetStatus(compose){
+  const td=document.querySelector(`td.fstat[data-compose="${CSS.escape(compose)}"]`); if(!td)return;
+  const [drift,upd]=await Promise.all([api("/api/drift?compose="+encodeURIComponent(compose)).then(r=>r.data).catch(()=>({})),api("/api/updates?compose="+encodeURIComponent(compose)).then(r=>r.data).catch(()=>({}))]);
+  td.innerHTML="";
+  const dc=(drift.items||[]).length; const uc=(upd.items||[]).filter(i=>i.status==="UpdateAvailable").length;
+  if(drift.available===false) td.append(chip("dim","docker?"));
+  else td.append(dc?chip("attn",dc+" drift"):chip("ok","in sync"));
+  if(uc) td.append(chip("attn",uc+" update"+(uc===1?"":"s")));
+}
+async function doFleet(path,label){
+  logLine("cmd","▶ fleet "+label);
+  const {data}=await post(path,{});
+  for(const r of (data.results||[])) logLine(r.ok?"ok":"bad",(r.ok?"✓ ":"✗ ")+r.stack+" — "+(r.summary||""));
+  loadStacks();
 }
 
 // ---- Git remote sync (monorepo-wide) ----
