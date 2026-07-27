@@ -11,6 +11,7 @@ pub mod compose;
 pub mod deploy;
 pub mod hostfs;
 pub mod mounttable;
+pub mod notify;
 pub mod ownership;
 pub mod remediation;
 pub mod report;

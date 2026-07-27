@@ -255,3 +255,16 @@ fn deploy_dry_run_takes_no_action() {
         "a dry-run deploy must not snapshot or change anything"
     );
 }
+
+#[test]
+fn notify_sends_message_to_stdout() {
+    let assert = Command::cargo_bin("yd")
+        .unwrap()
+        .arg("notify")
+        .arg("--message")
+        .arg("hello-operator-42")
+        .assert()
+        .success();
+    let out = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+    assert!(out.contains("hello-operator-42"), "got:\n{out}");
+}
