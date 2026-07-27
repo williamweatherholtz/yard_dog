@@ -422,7 +422,14 @@ fn run_fix(file: &str, yes: bool) -> Result<(), String> {
 }
 
 fn run_backup(file: &str, plan: bool, run: bool, dest: Option<&str>) -> Result<(), String> {
-    let yaml = std::fs::read_to_string(file).map_err(|e| format!("reading {file}: {e}"))?;
+    // Resolve the compose's relative bind sources and a relative --dest against
+    // the stack directory (as docker compose does), not the process CWD — so
+    // backup works regardless of where `yd` is invoked from (e.g. via the UI).
+    let compose = std::fs::canonicalize(file).unwrap_or_else(|_| std::path::PathBuf::from(file));
+    let yaml = std::fs::read_to_string(&compose).map_err(|e| format!("reading {file}: {e}"))?;
+    if let Some(stack_dir) = compose.parent() {
+        std::env::set_current_dir(stack_dir).map_err(|e| format!("entering stack dir: {e}"))?;
+    }
     let env: HashMap<String, String> = std::env::vars().collect();
     let volumes = RealVolumeInspector::new();
     let net = RealNetworkProbe;

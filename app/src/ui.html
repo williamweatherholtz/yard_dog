@@ -136,7 +136,7 @@
 const $ = (s,r=document)=>r.querySelector(s);
 const el=(t,c,txt)=>{const e=document.createElement(t); if(c)e.className=c; if(txt!=null)e.textContent=txt; return e;};
 let stacks=[], current=null, tab="overview", detail=null;
-const TABS=[["overview","Overview"],["compose","Compose"],["history","History"],["mounts","Mounts",1],["permissions","Permissions",1],["backups","Backups",1],["logs","Logs",1]];
+const TABS=[["overview","Overview"],["compose","Compose"],["history","History"],["mounts","Mounts"],["permissions","Permissions"],["backups","Backups"],["logs","Logs"]];
 
 $("#theme").onclick=()=>{const n=document.documentElement.getAttribute("data-theme");const nx=n==="dark"?"light":(n==="light"?"dark":(matchMedia("(prefers-color-scheme: dark)").matches?"light":"dark"));document.documentElement.setAttribute("data-theme",nx);};
 
@@ -184,7 +184,7 @@ function renderShell(){
   for(const [id,label,soon] of TABS){ const t=el("button","tab"+(tab===id?" active":""),label); if(soon)t.append(el("span","soon"," soon")); t.onclick=()=>{tab=id; renderShell();}; tabs.append(t); }
   m.append(tabs);
   const body=el("div"); body.id="tabbody"; m.append(body);
-  ({overview:renderOverview,compose:renderCompose,history:renderHistory}[tab]||renderSoon)();
+  ({overview:renderOverview,compose:renderCompose,history:renderHistory,mounts:renderMounts,permissions:renderPermissions,backups:renderBackups,logs:renderLogs}[tab]||renderSoon)();
   // console lives under every tab
   const c=el("section","console"); c.append(el("h3",null,"Output")); const pre=el("pre"); pre.id="console"; pre.append(el("span","dim","Actions print here.")); c.append(pre); m.append(c);
 }
@@ -290,6 +290,62 @@ async function showDiff(from,to){
   const {data}=await api(url); pre.innerHTML="";
   const d=(data.diff||"").trim(); if(!d){ pre.append(el("span","dim","(no differences)")); return; }
   for(const line of d.split("\n")){ const cls=line.startsWith("+")&&!line.startsWith("+++")?"add":line.startsWith("-")&&!line.startsWith("---")?"del":line.startsWith("@@")||line.startsWith("diff ")?"hdr":""; pre.append(el("span",cls,line+"\n")); }
+}
+
+// ---- Mounts ----
+async function renderMounts(){
+  const b=$("#tabbody"); b.append(el("p","muted","Loading mounts…"));
+  const {data}=await api("/api/mounts?compose="+encodeURIComponent(current)); b.innerHTML="";
+  const items=data.items||[];
+  if(!items.length){ b.append(el("p","muted","No mounts declared in this stack.")); return; }
+  const tbl=el("table"); const hr=el("tr"); ["Service","Target","Source","Type","Exists","Fix"].forEach(h=>hr.append(el("th",null,h))); tbl.append(hr);
+  for(const m of items){ const tr=el("tr");
+    tr.append(el("td",null,m.service)); tr.append(el("td","img",m.target)); tr.append(el("td","img",m.source||"—"));
+    const kd=el("td"); const kc={"host-bind":"","named-volume":"proxy","anonymous":"datastore","network":"datastore"}[m.type]||""; kd.append(el("span","kind "+kc,m.type)); tr.append(kd);
+    const ex=el("td"); if(m.type!=="host-bind"||m.exists===null) ex.append(el("span","stchip dim","n/a")); else ex.append(m.exists?chip("ok","exists"):chip("bad","missing")); tr.append(ex);
+    const fx=el("td"); if(m.remediations&&m.remediations.length){ const bt=el("button","","Fix…"); bt.onclick=()=>{ const r=m.remediations[0]; alert(r.summary+(r.command?"\n\n"+r.command:"")); }; fx.append(bt);} else fx.append(el("span","dim","—")); tr.append(fx);
+    tbl.append(tr);
+  }
+  b.append(tbl);
+}
+
+// ---- Permissions / compliance ----
+async function renderPermissions(){
+  const b=$("#tabbody"); b.append(el("p","muted","Checking compliance…"));
+  const {data}=await api("/api/permissions?compose="+encodeURIComponent(current)); b.innerHTML="";
+  b.append(el("div","badge "+(data.compliant?"ready":"notready"),data.compliant?"COMPLIANT":"NOT COMPLIANT"));
+  const f=data.findings||[];
+  if(!f.length){ b.append(el("div","clean","✓ No security or permission findings.")); return; }
+  const sec=el("section"); sec.append(el("h3",null,"Findings"));
+  for(const x of f){ const r=el("div","issue "+(x.severity==="block"?"block":"warn")); r.append(el("span","sev",x.severity)); const m=el("span"); m.append(el("span","src",x.service+" · "+x.rule+" · ")); m.append(document.createTextNode(x.message)); r.append(m); sec.append(r); }
+  b.append(sec);
+}
+
+// ---- Backups ----
+async function renderBackups(){
+  const b=$("#tabbody");
+  const bar=el("div","actionbar"); const bk=el("button","primary","Back up now"); bk.onclick=()=>confirmAct("Run an application-consistent backup?","/api/backup",{compose:current},"backup").then(()=>renderShell()); bar.append(bk); b.append(bar);
+  const {data}=await api("/api/backups?compose="+encodeURIComponent(current));
+  const items=data.items||[];
+  if(!items.length){ b.append(el("p","muted","No recovery points yet — take a backup.")); return; }
+  const tbl=el("table"); const hr=el("tr"); ["Recovery point","Files","Integrity"].forEach(h=>hr.append(el("th",null,h))); tbl.append(hr);
+  for(const it of items){ const tr=el("tr"); tr.append(el("td","img",it.name)); tr.append(el("td",null,String(it.entries)));
+    const v=el("td"); v.append(it.ok?chip("ok","verified"):chip("bad",it.issues+" issue"+(it.issues===1?"":"s"))); tr.append(v); tbl.append(tr); }
+  b.append(tbl);
+}
+
+// ---- Logs ----
+async function renderLogs(){
+  const b=$("#tabbody");
+  const bar=el("div","actionbar"); const rf=el("button","","↻ Refresh"); rf.onclick=()=>loadLogs(); bar.append(rf); bar.append(el("span","muted","last 200 lines")); b.append(bar);
+  const pre=el("pre","diff"); pre.id="logout"; pre.append(el("span","dim","Loading…")); b.append(pre);
+  loadLogs();
+}
+async function loadLogs(){
+  const pre=$("#logout"); if(!pre)return; pre.innerHTML="Loading…";
+  const {data}=await api("/api/logs?compose="+encodeURIComponent(current)+"&tail=200");
+  pre.innerHTML=""; const out=((data.stdout||"")+(data.stderr||"")).trim();
+  pre.append(el("span",out?"":"dim",out||"(no output — is the stack running?)"));
 }
 
 // ---- actions ----

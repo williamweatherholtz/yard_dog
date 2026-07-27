@@ -441,6 +441,30 @@ fn lifecycle_shows_default_and_transitions() {
 }
 
 #[test]
+fn backup_resolves_relative_paths_from_any_cwd() {
+    // The compose has a relative bind (./html); running `yd backup` from a
+    // DIFFERENT working directory must still resolve it against the stack dir
+    // (as docker compose does), so the UI (which runs from the served root) works.
+    let stack = tempfile::tempdir().unwrap();
+    std::fs::create_dir(stack.path().join("html")).unwrap();
+    std::fs::write(stack.path().join("html").join("index.html"), b"data").unwrap();
+    let compose = stack.path().join("docker-compose.yml");
+    std::fs::write(&compose, "services:\n  web:\n    image: nginx:1.27\n    volumes:\n      - ./html:/usr/share/nginx/html\n").unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+
+    Command::cargo_bin("yd")
+        .unwrap()
+        .current_dir(elsewhere.path()) // NOT the stack dir
+        .args(["backup", compose.to_str().unwrap(), "--run", "--dest", "bak"])
+        .assert()
+        .success();
+    // dest + copied bind resolve under the stack dir, not `elsewhere`
+    assert!(stack.path().join("bak").join("manifest.json").exists(), "manifest written under stack dir");
+    assert!(stack.path().join("bak").join("html").join("index.html").exists(), "relative bind copied");
+    assert!(!elsewhere.path().join("bak").exists(), "nothing created in the foreign cwd");
+}
+
+#[test]
 fn self_update_prints_current_version() {
     // Offline-safe: self-update reports "yd <version>: <status>" whether or not
     // the release host is reachable, so assert on the compiled-in version.

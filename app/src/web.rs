@@ -9,9 +9,12 @@
 //!   * every path parameter is confined under the served root (no absolute
 //!     paths, no `..`), so the API can never read or write outside it.
 
+use crate::classify::{MountType, NetworkProbe, VolumeInfo, VolumeInspector};
 use crate::drift::{self, DriftKind};
 use crate::lifecycle::LifecycleState;
-use crate::{compose, gitver, guardrails, lifecycle, preflight, registry, stacks, updates, workload};
+use crate::remediation::Issue;
+use crate::{compose, gitver, guardrails, hostfs, lifecycle, preflight, registry, report, stacks, updates, verify, workload};
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use tiny_http::{Header, Method, Response, Server};
@@ -107,6 +110,180 @@ fn findings_json(findings: &[guardrails::Finding]) -> String {
         })
         .collect();
     format!("[{}]", items.join(","))
+}
+
+// No-daemon probes: host-bind classification + existence (the core "is this a
+// local path?" read) work without Docker; named-volume driver / network refinement
+// is degraded to shape-based classification in v1.
+struct NoVolumes;
+impl VolumeInspector for NoVolumes {
+    fn inspect(&self, _name: &str) -> Option<VolumeInfo> {
+        None
+    }
+}
+struct NoNet;
+impl NetworkProbe for NoNet {
+    fn fs_type(&self, _path: &str) -> Option<String> {
+        None
+    }
+}
+
+/// Resolve relative host-bind sources (e.g. `./html`) against the stack directory
+/// — as docker compose does — so existence checks are correct regardless of the
+/// server's working directory. Named volumes (bare tokens) are left untouched.
+fn resolve_bind_sources(mounts: Vec<compose::RawMount>, stack_dir: &Path) -> Vec<compose::RawMount> {
+    mounts
+        .into_iter()
+        .map(|mut m| {
+            if let Some(src) = &m.source {
+                let is_host_path = src.starts_with("./") || src.starts_with("../") || src.starts_with('.') && src.contains('/') || src.contains('/');
+                let is_absolute = src.starts_with('/') || src.starts_with('~');
+                if is_host_path && !is_absolute {
+                    m.source = Some(stack_dir.join(src).to_string_lossy().replace('\\', "/"));
+                }
+            }
+            m
+        })
+        .collect()
+}
+
+fn mount_type_str(t: MountType) -> &'static str {
+    match t {
+        MountType::HostBind => "host-bind",
+        MountType::NamedVolume => "named-volume",
+        MountType::Anonymous => "anonymous",
+        MountType::Network => "network",
+    }
+}
+
+/// `GET /api/mounts?compose=REL` — mount typing + existence + remediation.
+fn mounts_json(root: &Path, rel: &str) -> Option<String> {
+    let p = safe_join(root, rel)?;
+    let yaml = std::fs::read_to_string(&p).ok()?;
+    let env: HashMap<String, String> = std::env::vars().collect();
+    let stack_dir = p.parent().unwrap_or(root);
+    let mounts = resolve_bind_sources(compose::parse_mounts(&yaml, &env).ok()?, stack_dir);
+    let mut ids = HashMap::new();
+    for (svc, (u, g)) in compose::parse_service_ids(&yaml, &env) {
+        if let (Some(u), Some(g)) = (u, g) {
+            ids.insert(svc, (u, g));
+        }
+    }
+    let reports = report::build_report(&mounts, &NoVolumes, &NoNet, &hostfs::RealFs, &ids);
+    let items: Vec<String> = reports
+        .iter()
+        .map(|m| {
+            let exists = match &m.existence {
+                Some(e) => e.exists.to_string(),
+                None => "null".to_string(),
+            };
+            let rems: Vec<String> = m
+                .remediations
+                .iter()
+                .map(|r| {
+                    format!(
+                        "{{\"summary\":{},\"command\":{}}}",
+                        json_escape(&r.summary),
+                        r.command.as_deref().map(json_escape).unwrap_or_else(|| "null".into())
+                    )
+                })
+                .collect();
+            format!(
+                "{{\"service\":{},\"target\":{},\"source\":{},\"type\":\"{}\",\"exists\":{},\"issues\":{},\"remediations\":[{}]}}",
+                json_escape(&m.service),
+                json_escape(&m.target),
+                m.source.as_deref().map(json_escape).unwrap_or_else(|| "null".into()),
+                mount_type_str(m.mount_type),
+                exists,
+                m.issues.len(),
+                rems.join(",")
+            )
+        })
+        .collect();
+    Some(format!("{{\"items\":[{}]}}", items.join(",")))
+}
+
+/// `GET /api/permissions?compose=REL` — security lens + ownership => compliance.
+fn permissions_json(root: &Path, rel: &str) -> Option<String> {
+    let p = safe_join(root, rel)?;
+    let yaml = std::fs::read_to_string(&p).ok()?;
+    let sec_rules = ["privileged", "docker-socket", "dangerous-cap", "host-network", "host-pid", "plaintext-secret"];
+    let mut findings: Vec<String> = Vec::new();
+    let mut compliant = true;
+    for f in guardrails::run_guardrails(&yaml) {
+        if sec_rules.contains(&f.rule.as_str()) {
+            let sev = match f.severity {
+                guardrails::Severity::Block => "block",
+                guardrails::Severity::Warn => "warn",
+            };
+            if f.severity == guardrails::Severity::Block {
+                compliant = false;
+            }
+            findings.push(format!(
+                "{{\"severity\":\"{}\",\"rule\":{},\"service\":{},\"message\":{}}}",
+                sev, json_escape(&f.rule), json_escape(&f.service), json_escape(&f.message)
+            ));
+        }
+    }
+    // ownership problems on bind paths
+    let env: HashMap<String, String> = std::env::vars().collect();
+    if let Ok(mounts) = compose::parse_mounts(&yaml, &env) {
+        let mut ids = HashMap::new();
+        for (svc, (u, g)) in compose::parse_service_ids(&yaml, &env) {
+            if let (Some(u), Some(g)) = (u, g) {
+                ids.insert(svc, (u, g));
+            }
+        }
+        for m in report::build_report(&mounts, &NoVolumes, &NoNet, &hostfs::RealFs, &ids) {
+            for iss in &m.issues {
+                if let Issue::Ownership { path, .. } = iss {
+                    compliant = false;
+                    findings.push(format!(
+                        "{{\"severity\":\"warn\",\"rule\":\"ownership\",\"service\":{},\"message\":{}}}",
+                        json_escape(&m.service),
+                        json_escape(&format!("ownership/permission issue on {path}"))
+                    ));
+                }
+            }
+        }
+    }
+    Some(format!("{{\"compliant\":{},\"findings\":[{}]}}", compliant, findings.join(",")))
+}
+
+/// `GET /api/backups?compose=REL` — recovery points + verify status. A backup
+/// dest holds its manifest.json at its root (that dest IS one recovery point);
+/// a dest that instead contains timestamped subdirs is treated as many.
+fn backups_json(root: &Path, rel: &str) -> Option<String> {
+    let p = safe_join(root, rel)?;
+    let base = p.parent()?.join(".yd-backups");
+    let mut items: Vec<String> = Vec::new();
+
+    let report_point = |dir: &Path, name: &str| -> Option<String> {
+        let m = std::fs::read_to_string(dir.join("manifest.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<verify::Manifest>(&s).ok())?;
+        let findings = verify::verify(dir, &m).unwrap_or_default();
+        Some(format!(
+            "{{\"name\":{},\"entries\":{},\"issues\":{},\"ok\":{}}}",
+            json_escape(name), m.entries.len(), findings.len(), findings.is_empty()
+        ))
+    };
+
+    // The dest itself is a recovery point when it has a manifest at its root.
+    if let Some(pt) = report_point(&base, ".yd-backups") {
+        items.push(pt);
+    } else if let Ok(rd) = std::fs::read_dir(&base) {
+        // else treat manifest-bearing subdirs as recovery points.
+        for entry in rd.flatten() {
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if let Some(pt) = report_point(&entry.path(), &name) {
+                    items.push(pt);
+                }
+            }
+        }
+    }
+    Some(format!("{{\"items\":[{}]}}", items.join(",")))
 }
 
 /// `GET /api/compose?compose=REL` — the raw compose text for the editor.
@@ -417,6 +594,27 @@ pub fn serve(port: u16, root: &Path) -> io::Result<()> {
                 Some(b) => json_response(200, b),
                 None => json_response(400, "{\"error\":\"compose + from required\"}".into()),
             },
+            (Method::Get, "/api/mounts") => match query_param(&query, "compose").and_then(|r| mounts_json(&root, &r)) {
+                Some(b) => json_response(200, b),
+                None => json_response(400, "{\"error\":\"compose required or outside root\"}".into()),
+            },
+            (Method::Get, "/api/permissions") => match query_param(&query, "compose").and_then(|r| permissions_json(&root, &r)) {
+                Some(b) => json_response(200, b),
+                None => json_response(400, "{\"error\":\"compose required or outside root\"}".into()),
+            },
+            (Method::Get, "/api/backups") => match query_param(&query, "compose").and_then(|r| backups_json(&root, &r)) {
+                Some(b) => json_response(200, b),
+                None => json_response(400, "{\"error\":\"compose required or outside root\"}".into()),
+            },
+            (Method::Get, "/api/logs") => {
+                match query_param(&query, "compose").and_then(|r| safe_join(&root, &r)) {
+                    Some(abs) => {
+                        let tail = query_param(&query, "tail").unwrap_or_else(|| "200".into());
+                        json_response(200, run_tool(Path::new("docker"), &["compose".into(), "-f".into(), abs.to_string_lossy().to_string(), "logs".into(), "--no-color".into(), "--tail".into(), tail]))
+                    }
+                    None => json_response(400, "{\"error\":\"compose required or outside root\"}".into()),
+                }
+            }
             (Method::Post, p) if p.starts_with("/api/") => {
                 // Anti-CSRF: require an application/json body and a loopback (or
                 // absent) Origin, so a visited page cannot drive actions here.
