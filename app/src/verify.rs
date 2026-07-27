@@ -26,6 +26,7 @@ pub struct Manifest {
 pub enum Finding {
     Missing(String),
     Changed(String),
+    Unexpected(String),
 }
 
 fn hash_file(path: &Path) -> io::Result<(String, u64)> {
@@ -81,6 +82,19 @@ pub fn verify(dir: &Path, manifest: &Manifest) -> io::Result<Vec<Finding>> {
             findings.push(Finding::Changed(rel.clone()));
         }
     }
+    // Bidirectional: a file present under `dir` but absent from the manifest is
+    // unexpected — the backup no longer matches exactly what was captured.
+    let mut present = Vec::new();
+    walk(dir, dir, &mut present)?;
+    for path in present {
+        let rel_str = path.strip_prefix(dir).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+        if rel_str == "manifest.json" {
+            continue;
+        }
+        if !manifest.entries.contains_key(&rel_str) {
+            findings.push(Finding::Unexpected(rel_str));
+        }
+    }
     Ok(findings)
 }
 
@@ -118,6 +132,23 @@ mod tests {
         assert!(findings.contains(&Finding::Missing("gone.txt".to_string())));
         assert!(findings.contains(&Finding::Changed("edit.txt".to_string())));
         assert_eq!(findings.len(), 2);
+    }
+
+    #[test]
+    fn verify_detects_unexpected_extra_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), b"hi").unwrap();
+        let manifest = build_manifest(dir.path()).unwrap();
+        // a file appears after the backup was captured
+        std::fs::write(dir.path().join("stray.txt"), b"extra").unwrap();
+
+        let findings = verify(dir.path(), &manifest).unwrap();
+        assert!(
+            findings.contains(&Finding::Unexpected("stray.txt".to_string())),
+            "an extra file must be flagged: {findings:?}"
+        );
+        // the original file is still intact, so only the stray is reported
+        assert_eq!(findings.len(), 1);
     }
 
     #[test]
