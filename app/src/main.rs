@@ -254,8 +254,24 @@ impl yarddog::deploy::Deployer for RealDeployer {
 /// for now it is a logged no-op so the deploy orchestration is usable.
 struct RealBackupHook;
 impl yarddog::deploy::BackupHook for RealBackupHook {
-    fn pre_change_backup(&self, _stack_dir: &std::path::Path) -> std::io::Result<()> {
-        println!("note: pre-change backup is a stub in this build (configure a backup dest to enable)");
+    fn pre_change_backup(&self, stack_dir: &std::path::Path) -> std::io::Result<()> {
+        let Some(compose) = yarddog::stacks::find_compose(stack_dir) else {
+            return Ok(()); // no compose here — nothing to back up
+        };
+        let yaml = std::fs::read_to_string(&compose)?;
+        let env: HashMap<String, String> = std::env::vars().collect();
+        let dest = yarddog::backup::default_backup_dest(stack_dir);
+        std::fs::create_dir_all(&dest)?;
+        let dest_str = dest.to_string_lossy().to_string();
+        let volumes = RealVolumeInspector::new();
+        let net = RealNetworkProbe;
+        let manifest = yarddog::backup::backup_stack(
+            &yaml, &env, &dest_str, true, &volumes, &net, &RealRunner, &RealArchiver,
+        )?;
+        println!(
+            "pre-change backup -> {dest_str}: dumps={:?} copies={:?}",
+            manifest.dumped, manifest.copied
+        );
         Ok(())
     }
 }

@@ -235,6 +235,27 @@ impl Archiver for DockerVolumeArchiver<'_> {
     }
 }
 
+/// The default, git-excluded location for a stack's pre-change backups.
+pub fn default_backup_dest(stack_dir: &std::path::Path) -> std::path::PathBuf {
+    stack_dir.join(".yd-backups")
+}
+
+/// Build and execute a backup of a whole stack in one call.
+#[allow(clippy::too_many_arguments)]
+pub fn backup_stack(
+    yaml: &str,
+    env: &HashMap<String, String>,
+    dest_dir: &str,
+    confirmed: bool,
+    volumes: &dyn VolumeInspector,
+    net: &dyn NetworkProbe,
+    runner: &dyn CommandRunner,
+    archiver: &dyn Archiver,
+) -> std::io::Result<BackupManifest> {
+    let plan = build_backup_plan(yaml, env, volumes, net);
+    execute_plan(&plan, dest_dir, confirmed, runner, archiver)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,5 +438,30 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn default_backup_dest_is_a_gitignored_subdir() {
+        let d = default_backup_dest(std::path::Path::new("/srv/immich"));
+        assert!(d.ends_with(".yd-backups"), "got {d:?}");
+    }
+
+    #[test]
+    fn backup_stack_builds_and_executes() {
+        let yaml = "services:\n  db:\n    image: postgres:16\n    volumes:\n      - pgdata:/var/lib/postgresql/data\n  app:\n    image: nginx\n    volumes:\n      - /srv/site:/x\n";
+        let r = RecRunner::default();
+        let a = RecArch::default();
+        let m = backup_stack(yaml, &env(), "/dest", true, &NoVols, &LocalFs, &r, &a).unwrap();
+        assert!(r.calls.borrow().iter().any(|c| c.contains("pg_dump")));
+        assert!(a.calls.borrow().iter().any(|n| n == "pgdata"));
+        assert!(a.calls.borrow().iter().any(|n| n == "/srv/site"));
+        assert!(!m.dumped.is_empty());
+
+        // not confirmed -> nothing happens
+        let r2 = RecRunner::default();
+        let a2 = RecArch::default();
+        let m2 = backup_stack(yaml, &env(), "/dest", false, &NoVols, &LocalFs, &r2, &a2).unwrap();
+        assert!(r2.calls.borrow().is_empty() && a2.calls.borrow().is_empty());
+        assert_eq!(m2, BackupManifest::default());
     }
 }
