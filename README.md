@@ -117,12 +117,19 @@ Run `yd <command> --help` for full flags. Grouped by what they touch:
 ```sh
 cd app
 cargo build --release   # binary: target/release/yd
-cargo test              # unit + integration tests
+cargo test              # unit + integration tests (hermetic, no Docker)
+
+# End-to-end tests that run the real `yd` binary against a live Docker daemon,
+# one per persona use case (see .tracking/personas-usecases.sysml). Opt-in:
+cargo test --test e2e_docker -- --ignored --test-threads=1
 ```
 
 The OS- and Docker-touching pieces sit behind traits, so the classification,
 backup, guardrail, and lifecycle logic is unit-tested on any platform against
-fixtures — no Docker required to run the test suite.
+fixtures — no Docker required for the default `cargo test`. The `e2e_docker`
+suite additionally proves the full journeys (deploy, rollback, upgrade, backup+
+verify, guardrails, lifecycle) against a real daemon; the Docker-touching cases
+skip gracefully when no daemon is reachable.
 
 ---
 
