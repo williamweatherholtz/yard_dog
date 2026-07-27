@@ -286,6 +286,37 @@ fn backups_json(root: &Path, rel: &str) -> Option<String> {
     Some(format!("{{\"items\":[{}]}}", items.join(",")))
 }
 
+/// `GET /api/git` — the monorepo's remote status (remote URL + ahead/behind).
+fn git_status_json(root: &Path) -> String {
+    let remote = gitver::remote_url(root);
+    let (ahead, behind) = if remote.is_some() {
+        gitver::ahead_behind(root).map(|(a, b)| (a as i64, b as i64)).unwrap_or((-1, -1))
+    } else {
+        (-1, -1)
+    };
+    format!(
+        "{{\"remote\":{},\"ahead\":{},\"behind\":{}}}",
+        remote.map(|u| json_escape(&u)).unwrap_or_else(|| "null".into()),
+        ahead,
+        behind
+    )
+}
+
+/// A plausible git remote URL (https/ssh/scp-style or a local path); rejects
+/// control characters. Auth itself is the operator's system git, not stored here.
+fn valid_remote_url(url: &str) -> bool {
+    if url.is_empty() || url.chars().any(|c| c.is_control()) {
+        return false;
+    }
+    url.starts_with("https://")
+        || url.starts_with("http://")
+        || url.starts_with("ssh://")
+        || url.starts_with("git@")
+        || url.starts_with("git://")
+        || url.starts_with("file://")
+        || Path::new(url).is_absolute() // a local / NAS-mounted bare repo path
+}
+
 /// `GET /api/stats?compose=REL` — per-service live CPU/memory (docker stats).
 fn stats_json(root: &Path, rel: &str) -> Option<String> {
     let p = safe_join(root, rel)?;
@@ -539,6 +570,25 @@ fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
                 Err(e) => (200, format!("{{\"ok\":false,\"error\":{}}}", json_escape(&e.to_string()))),
             }
         }
+        // Git remote sync on the monorepo root (auth is the operator's system git).
+        "/api/git/connect" => {
+            let Some(url) = field(&v, "url") else { return bad("url required") };
+            if !valid_remote_url(url) {
+                return bad("not a valid git remote URL (https/ssh/git@)");
+            }
+            match gitver::set_remote(root, url) {
+                Ok(()) => (200, "{\"ok\":true}".into()),
+                Err(e) => (200, format!("{{\"ok\":false,\"error\":{}}}", json_escape(&e.to_string()))),
+            }
+        }
+        "/api/git/push" => match gitver::push(root) {
+            Ok(out) => (200, format!("{{\"ok\":true,\"stdout\":{}}}", json_escape(&out))),
+            Err(e) => (200, format!("{{\"ok\":false,\"stderr\":{}}}", json_escape(&e.to_string()))),
+        },
+        "/api/git/pull" => match gitver::pull(root) {
+            Ok(out) => (200, format!("{{\"ok\":true,\"stdout\":{}}}", json_escape(&out))),
+            Err(e) => (200, format!("{{\"ok\":false,\"stderr\":{}}}", json_escape(&e.to_string()))),
+        },
         _ => (404, "{\"error\":\"unknown action\"}".into()),
     }
 }
@@ -559,8 +609,12 @@ fn json_response(status: u16, body: String) -> Response<io::Cursor<Vec<u8>>> {
 pub fn serve(port: u16, root: &Path) -> io::Result<()> {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     // The served root IS the monorepo (decGitVersioning): one repo, per-stack
-    // snapshots scoped by path. Initialise it once on startup.
+    // snapshots scoped by path. Initialise it once on startup, with an initial
+    // commit so remote sync (push) works immediately.
     let _ = gitver::ensure_repo(&root);
+    if gitver::history(&root).map(|h| h.is_empty()).unwrap_or(true) {
+        let _ = gitver::snapshot(&root, "yd: initialize config repo");
+    }
     let server = Server::http(("127.0.0.1", port))
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("cannot bind 127.0.0.1:{port}: {e}")))?;
     println!("Yard Dog control plane on http://127.0.0.1:{port}  (loopback only — Ctrl-C to stop)");
@@ -626,6 +680,7 @@ pub fn serve(port: u16, root: &Path) -> io::Result<()> {
                 Some(b) => json_response(200, b),
                 None => json_response(400, "{\"error\":\"compose required or outside root\"}".into()),
             },
+            (Method::Get, "/api/git") => json_response(200, git_status_json(&root)),
             (Method::Get, "/api/stats") => match query_param(&query, "compose").and_then(|r| stats_json(&root, &r)) {
                 Some(b) => json_response(200, b),
                 None => json_response(400, "{\"error\":\"compose required or outside root\"}".into()),

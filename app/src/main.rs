@@ -146,6 +146,11 @@ enum Command {
         #[command(subcommand)]
         action: PinAction,
     },
+    /// Connect and sync the config monorepo with a git remote (auth = your git).
+    Git {
+        #[command(subcommand)]
+        action: GitAction,
+    },
     /// Check whether a newer Yard Dog release is available (or apply it).
     SelfUpdate {
         /// Download, verify (SHA256), and install the latest release in place.
@@ -186,6 +191,33 @@ enum Command {
         /// activate | deprecate | archive | restore (omit to just show the current state).
         #[arg(long)]
         event: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum GitAction {
+    /// Show or set the config repo's git remote.
+    Remote {
+        #[arg(long)]
+        repo: String,
+        /// Set the remote URL (omit to just show it).
+        #[arg(long)]
+        url: Option<String>,
+    },
+    /// Push the config repo to its remote.
+    Push {
+        #[arg(long)]
+        repo: String,
+    },
+    /// Fast-forward pull the config repo from its remote.
+    Pull {
+        #[arg(long)]
+        repo: String,
+    },
+    /// Show remote + ahead/behind status.
+    Status {
+        #[arg(long)]
+        repo: String,
     },
 }
 
@@ -264,6 +296,7 @@ fn main() {
         Command::Prune { dest, keep } => run_prune(&dest, keep),
         Command::Version { action } => run_version(action),
         Command::Pin { action } => run_pin(action),
+        Command::Git { action } => run_git(action),
         Command::SelfUpdate { apply } => run_self_update(apply),
         Command::Serve { root, port } => {
             yarddog::web::serve(port, std::path::Path::new(&root)).map_err(|e| e.to_string())
@@ -734,6 +767,52 @@ fn run_lifecycle(repo: &str, event: Option<&str>) -> Result<(), String> {
         }
     };
     println!("lifecycle: {}", state.as_str());
+    Ok(())
+}
+
+fn run_git(action: GitAction) -> Result<(), String> {
+    use yarddog::gitver;
+    let root_of = |repo: &str| {
+        gitver::repo_root(std::path::Path::new(repo)).unwrap_or_else(|| std::path::PathBuf::from(repo))
+    };
+    match action {
+        GitAction::Remote { repo, url } => {
+            let root = root_of(&repo);
+            match url {
+                Some(u) => {
+                    gitver::set_remote(&root, &u).map_err(|e| e.to_string())?;
+                    println!("remote set: {u}");
+                }
+                None => match gitver::remote_url(&root) {
+                    Some(u) => println!("{u}"),
+                    None => println!("no remote configured"),
+                },
+            }
+        }
+        GitAction::Push { repo } => {
+            let out = gitver::push(&root_of(&repo)).map_err(|e| format!("push failed: {e}"))?;
+            print!("{out}");
+            println!("pushed");
+        }
+        GitAction::Pull { repo } => {
+            let out = gitver::pull(&root_of(&repo)).map_err(|e| format!("pull failed: {e}"))?;
+            print!("{out}");
+            println!("pulled");
+        }
+        GitAction::Status { repo } => {
+            let root = root_of(&repo);
+            match gitver::remote_url(&root) {
+                Some(u) => {
+                    print!("remote: {u}");
+                    if let Some((a, b)) = gitver::ahead_behind(&root) {
+                        print!("  ({a} ahead, {b} behind)");
+                    }
+                    println!();
+                }
+                None => println!("no remote configured"),
+            }
+        }
+    }
     Ok(())
 }
 

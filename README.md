@@ -99,6 +99,7 @@ Run `yd <command> --help` for full flags. Grouped by what they touch:
 | `yd pin add --repo <dir> --service <s>` / `yd pin list --repo <dir>` | Pin services to hold their updates. |
 | `yd notify --message <msg>` | Send a notification through the default (stdout) channel. |
 | `yd self-update [--apply]` | Check for a newer release; with `--apply`, download it, verify its SHA256, and atomically replace the running binary. |
+| `yd git remote/push/pull/status --repo <dir>` | Connect and sync the config monorepo with a git remote (auth via your system git). |
 
 ---
 
@@ -141,6 +142,11 @@ a tabbed detail view:
 
 (Mounts, Permissions, Backups, and Logs tabs are on the roadmap.) Every action runs
 through the same guarded path (guardrails → backup → health-gate → rollback).
+
+Config is versioned in a single **monorepo** at the served root; the header **Git**
+panel connects a remote and pushes/pulls all your config offsite in one action,
+reusing your **system git credentials** (credential helper / SSH) — Yard Dog never
+stores tokens.
 
 **Security model (secure by default).** The server binds `127.0.0.1` only; it
 never listens on a non-loopback address. It rejects any request whose `Host`

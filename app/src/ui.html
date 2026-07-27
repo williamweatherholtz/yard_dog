@@ -119,6 +119,7 @@
   <div class="brand"><span class="paw">◕</span> Yard&nbsp;Dog <small>control plane</small></div>
   <div class="spacer"></div>
   <span class="loopback">🔒 <b>loopback</b> · 127.0.0.1</span>
+  <button id="git" title="Git remote sync">⇅ Git</button>
   <button id="theme" title="Toggle theme" aria-label="Toggle theme">◐</button>
 </header>
 <div class="layout">
@@ -350,6 +351,36 @@ async function loadLogs(){
   const {data}=await api("/api/logs?compose="+encodeURIComponent(current)+"&tail=200");
   pre.innerHTML=""; const out=((data.stdout||"")+(data.stderr||"")).trim();
   pre.append(el("span",out?"":"dim",out||"(no output — is the stack running?)"));
+}
+
+// ---- Git remote sync (monorepo-wide) ----
+$("#git").onclick=renderGit;
+async function renderGit(){
+  current=null; renderRail();
+  const m=$("#main"); m.innerHTML="";
+  m.append(el("h1",null,"Git remote sync"));
+  m.append(el("div","path","One repo at the served root · authentication uses your system git (credential helper / SSH) — no tokens are stored here"));
+  const {data}=await api("/api/git");
+  const status=el("div","actionbar");
+  if(data.remote){ status.append(el("span","chip active","connected")); status.append(el("span","img",data.remote)); if(data.ahead>=0) status.append(el("span","muted",`${data.ahead} ahead · ${data.behind} behind`)); }
+  else status.append(el("span","chip","not connected"));
+  m.append(status);
+  const bar=el("div","actionbar"); const b=(l,cls,fn)=>{const x=el("button",cls,l);x.onclick=fn;bar.append(x);};
+  b(data.remote?"Change remote…":"Connect a remote…","primary",()=>{const url=prompt("Git remote URL (https://… or git@…):",data.remote||"");if(url)doGit("/api/git/connect",{url},"connect").then(renderGit);});
+  if(data.remote){
+    b("Push","",()=>doGit("/api/git/push",{},"push").then(renderGit));
+    b("Pull","",()=>doGit("/api/git/pull",{},"pull").then(renderGit));
+  }
+  m.append(bar);
+  const c=el("section","console"); c.append(el("h3",null,"Output")); const pre=el("pre"); pre.id="console"; pre.append(el("span","dim","Git output appears here.")); c.append(pre); m.append(c);
+}
+async function doGit(path,body,label){
+  logLine("cmd","▶ git "+label);
+  const {data}=await post(path,body);
+  if(data.error){ logLine("bad","✗ "+data.error); return; }
+  if(data.stdout&&data.stdout.trim()) logLine("",data.stdout.trim());
+  if(data.stderr&&data.stderr.trim()) logLine("bad",data.stderr.trim());
+  logLine(data.ok?"ok":"bad",data.ok?"✓ done":"✗ failed");
 }
 
 // ---- actions ----

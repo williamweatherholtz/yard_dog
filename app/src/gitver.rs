@@ -225,9 +225,90 @@ pub fn restore_scoped(root: &Path, rel: &Path, sha: &str) -> io::Result<String> 
     head(root)
 }
 
+// ---- remote sync (needRemoteConfigSync) -------------------------------------
+// Auth is delegated to the operator's own git (credential helper / SSH agent /
+// gh) — Yard Dog never handles or stores raw tokens.
+
+/// Set (or replace) the `origin` remote URL for the repo at `root`.
+pub fn set_remote(root: &Path, url: &str) -> io::Result<()> {
+    let _ = git_ok(root, &["remote", "remove", "origin"]); // ignore if absent
+    git_ok(root, &["remote", "add", "origin", url])?;
+    Ok(())
+}
+
+/// The `origin` remote URL, or `None` if no remote is configured.
+pub fn remote_url(root: &Path) -> Option<String> {
+    git_ok(root, &["remote", "get-url", "origin"])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn current_branch(root: &Path) -> io::Result<String> {
+    Ok(git_ok(root, &["rev-parse", "--abbrev-ref", "HEAD"])?.trim().to_string())
+}
+
+/// Push the current branch to `origin`, setting upstream. Auth is the operator's.
+pub fn push(root: &Path) -> io::Result<String> {
+    let branch = current_branch(root)?;
+    git_ok(root, &["push", "-u", "origin", &branch])
+}
+
+/// Fast-forward pull from `origin`.
+pub fn pull(root: &Path) -> io::Result<String> {
+    git_ok(root, &["pull", "--ff-only"])
+}
+
+/// (ahead, behind) commit counts vs `origin/<branch>` after a fetch, or `None`
+/// if there is no remote / upstream to compare against.
+pub fn ahead_behind(root: &Path) -> Option<(usize, usize)> {
+    git_ok(root, &["fetch", "origin"]).ok()?;
+    let branch = current_branch(root).ok()?;
+    let out = git_ok(root, &["rev-list", "--left-right", "--count", &format!("origin/{branch}...HEAD")]).ok()?;
+    let mut it = out.split_whitespace();
+    let behind = it.next()?.parse().ok()?;
+    let ahead = it.next()?.parse().ok()?;
+    Some((ahead, behind))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn raw_git(dir: &Path, args: &[&str]) {
+        let ok = Command::new("git").args(["-C", dir.to_str().unwrap()]).args(args).status().map(|s| s.success()).unwrap_or(false);
+        assert!(ok, "git {args:?} failed in {dir:?}");
+    }
+
+    #[test]
+    fn remote_push_pull_roundtrip() {
+        // a working repo with one snapshot
+        let work = tempfile::tempdir().unwrap();
+        init(work.path()).unwrap();
+        std::fs::write(work.path().join("docker-compose.yml"), "image: nginx:1.27\n").unwrap();
+        snapshot(work.path(), "v1").unwrap();
+
+        // a bare repo acts as the remote (local => deterministic, no auth)
+        let bare = tempfile::tempdir().unwrap();
+        raw_git(bare.path(), &["init", "--bare", "-q"]);
+        let url = bare.path().to_string_lossy().replace('\\', "/");
+
+        set_remote(work.path(), &url).unwrap();
+        assert_eq!(remote_url(work.path()).as_deref(), Some(url.as_str()));
+        push(work.path()).unwrap();
+        // in sync right after push
+        assert_eq!(ahead_behind(work.path()), Some((0, 0)));
+
+        // a new local commit is 1 ahead
+        std::fs::write(work.path().join("docker-compose.yml"), "image: nginx:1.29\n").unwrap();
+        snapshot(work.path(), "v2").unwrap();
+        assert_eq!(ahead_behind(work.path()).map(|(a, _)| a), Some(1));
+
+        // a fresh clone of the remote has v1 (the pushed state)
+        let clone = tempfile::tempdir().unwrap();
+        raw_git(clone.path(), &["clone", "-q", &url, "."]);
+        assert_eq!(std::fs::read_to_string(clone.path().join("docker-compose.yml")).unwrap(), "image: nginx:1.27\n");
+    }
 
     #[test]
     fn monorepo_scoped_ops_isolate_stacks() {
