@@ -5,6 +5,7 @@
 //! unit-testable on any platform against fixtures.
 
 pub mod apply;
+pub mod backup;
 pub mod classify;
 pub mod compose;
 pub mod hostfs;

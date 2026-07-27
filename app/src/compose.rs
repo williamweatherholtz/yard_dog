@@ -160,6 +160,26 @@ fn interpolate(input: &str, env: &HashMap<String, String>) -> String {
     out
 }
 
+/// Map each service name to its `image` string (if declared).
+pub fn parse_service_images(yaml: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
+        return out;
+    };
+    let Some(services) = doc.get("services").and_then(|v| v.as_mapping()) else {
+        return out;
+    };
+    for (name, svc) in services {
+        if let (Some(n), Some(img)) = (
+            name.as_str(),
+            svc.get("image").and_then(|v| v.as_str()),
+        ) {
+            out.insert(n.to_string(), img.to_string());
+        }
+    }
+    out
+}
+
 /// Read each service's `PUID`/`PGID` from its `environment` (list or map form),
 /// interpolating `${VAR}` values. Returns service name -> (puid, pgid).
 pub fn parse_service_ids(

@@ -30,6 +30,14 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Plan an application-consistent backup for a stack.
+    Backup {
+        /// Path to the docker-compose file.
+        file: String,
+        /// Preview the plan (no backup runs).
+        #[arg(long)]
+        plan: bool,
+    },
 }
 
 fn main() {
@@ -37,6 +45,7 @@ fn main() {
     let result = match cli.command {
         Command::Inspect { file } => run_inspect(&file),
         Command::Fix { file, yes } => run_fix(&file, yes),
+        Command::Backup { file, plan } => run_backup(&file, plan),
     };
     if let Err(e) = result {
         eprintln!("yd: {e}");
@@ -96,6 +105,20 @@ fn run_fix(file: &str, yes: bool) -> Result<(), String> {
     }
     if !any {
         println!("nothing to fix");
+    }
+    Ok(())
+}
+
+fn run_backup(file: &str, plan: bool) -> Result<(), String> {
+    let yaml = std::fs::read_to_string(file).map_err(|e| format!("reading {file}: {e}"))?;
+    let env: HashMap<String, String> = std::env::vars().collect();
+    let volumes = RealVolumeInspector::new();
+    let net = RealNetworkProbe;
+    let backup_plan = yarddog::backup::build_backup_plan(&yaml, &env, &volumes, &net);
+    if plan {
+        print!("{}", yarddog::backup::render_plan(&backup_plan));
+    } else {
+        println!("Backup execution is not implemented yet — re-run with --plan to preview.");
     }
     Ok(())
 }

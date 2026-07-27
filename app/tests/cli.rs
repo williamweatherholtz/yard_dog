@@ -83,3 +83,27 @@ fn fix_applies_missing_dir_only_when_confirmed() {
         "a confirmed fix must create the missing host path"
     );
 }
+
+#[test]
+fn backup_plan_lists_dumps_and_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    let compose = dir.path().join("docker-compose.yml");
+    std::fs::write(
+        &compose,
+        "services:\n  db:\n    image: postgres:16\n    volumes:\n      - pgdata:/var/lib/postgresql/data\n  app:\n    image: nginx\n    volumes:\n      - /srv/site:/usr/share/nginx/html\n",
+    )
+    .unwrap();
+
+    let assert = Command::cargo_bin("yd")
+        .unwrap()
+        .arg("backup")
+        .arg(compose.to_str().unwrap())
+        .arg("--plan")
+        .assert()
+        .success();
+    let out = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+
+    assert!(out.contains("pg_dump"), "plan should include the pg dump; got:\n{out}");
+    assert!(out.contains("pgdata"), "plan should list the named volume; got:\n{out}");
+    assert!(out.contains("/srv/site"), "plan should list the bind; got:\n{out}");
+}
