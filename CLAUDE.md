@@ -100,3 +100,24 @@ If a command errors or hangs, switch shells or fix the *form* rather than re-iss
 Prefer **absolute paths** for file/script arguments so a working-directory change in one tool doesn't
 break the next. Record your project's concrete host specifics (OS, shell, toolchain paths) right here,
 so future sessions inherit them instead of rediscovering them.
+
+---
+
+## 7. Project operating policy (this project's own choices)
+
+Project-level delivery choices, authored as **accepted Decisions in `.tracking/`** — not engine edits:
+
+- **Sprint reviews need no human sign-off** (`decNoReviewSignoff`). Record the sprint `reviewGate`
+  as a `method=inspect` verification judged by the AI; never block a sprint close on human
+  confirmation. Decision **acceptance** still requires a genuine human attestation — this exception
+  is scoped to sprint *reviews* only.
+- **Autonomous cadence — ≥5 sprints per session** (`decAutonomousCadence`). Drive the full loop
+  (refine → standup → implement → AI-review → closeOut → retro) for at least five sprints before
+  pausing, selecting each next sprint's scope from the prioritized Needs. Pause early only for a
+  genuine blocker (a hard-to-reverse choice not derivable from recorded Needs/Decisions, a
+  direction-changing ambiguity, or an unresolvable failure). The human supervises asynchronously via
+  `keel orient` / `keel coverage`.
+
+**Host + build:** Windows 11 / PowerShell + Git-Bash; Rust (cargo) + Docker 29.x. The product crate
+is `app/` (Rust, Bollard); host-FS/Docker access is trait-abstracted so unit tests run on Windows
+against fixtures. Run `keel` from the repo root; run `cargo` from `app/`.
