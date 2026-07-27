@@ -44,6 +44,14 @@ enum Command {
         #[arg(long)]
         dest: Option<String>,
     },
+    /// Safely deploy a stack: back up, snapshot, deploy, roll back on failure.
+    Deploy {
+        /// Path to the docker-compose file.
+        file: String,
+        /// Actually deploy. Without this it is a no-op preview.
+        #[arg(long)]
+        yes: bool,
+    },
     /// List the compose stacks discovered under a root directory.
     Stacks {
         /// Root directory to scan (each stack is a subdirectory with a compose file).
@@ -78,6 +86,7 @@ fn main() {
             run,
             dest,
         } => run_backup(&file, plan, run, dest.as_deref()),
+        Command::Deploy { file, yes } => run_deploy(&file, yes),
         Command::Stacks { root } => run_stacks(&root),
         Command::Verify { dest } => run_verify(&dest),
         Command::Prune { dest, keep } => run_prune(&dest, keep),
@@ -178,6 +187,48 @@ fn run_backup(file: &str, plan: bool, run: bool, dest: Option<&str>) -> Result<(
         println!("Nothing to do — pass --plan to preview or --run --dest DIR to execute.");
     }
     Ok(())
+}
+
+fn run_deploy(file: &str, yes: bool) -> Result<(), String> {
+    let compose = std::path::Path::new(file);
+    let stack_dir = compose.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let history = stack_dir.join(".yd-history");
+    let outcome = yarddog::deploy::safe_deploy(compose, &history, yes, &RealBackupHook, &RealDeployer)
+        .map_err(|e| format!("deploy failed: {e}"))?;
+    println!("deploy: {outcome:?}");
+    if matches!(outcome, yarddog::deploy::DeployOutcome::BackupFailed(_)) {
+        std::process::exit(2);
+    }
+    Ok(())
+}
+
+/// Real deployer: `docker compose up -d` in the stack directory.
+struct RealDeployer;
+impl yarddog::deploy::Deployer for RealDeployer {
+    fn deploy(&self, stack_dir: &std::path::Path) -> std::io::Result<()> {
+        let status = std::process::Command::new("docker")
+            .args(["compose", "up", "-d"])
+            .current_dir(stack_dir)
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "docker compose up failed",
+            ))
+        }
+    }
+}
+
+/// Pre-change backup hook. TODO: wire to `yd backup --run` with a dest policy;
+/// for now it is a logged no-op so the deploy orchestration is usable.
+struct RealBackupHook;
+impl yarddog::deploy::BackupHook for RealBackupHook {
+    fn pre_change_backup(&self, _stack_dir: &std::path::Path) -> std::io::Result<()> {
+        println!("note: pre-change backup is a stub in this build (configure a backup dest to enable)");
+        Ok(())
+    }
 }
 
 fn run_stacks(root: &str) -> Result<(), String> {

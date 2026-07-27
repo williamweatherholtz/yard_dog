@@ -8,6 +8,7 @@ pub mod apply;
 pub mod backup;
 pub mod classify;
 pub mod compose;
+pub mod deploy;
 pub mod hostfs;
 pub mod mounttable;
 pub mod ownership;

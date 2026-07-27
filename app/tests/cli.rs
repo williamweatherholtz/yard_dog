@@ -236,3 +236,22 @@ fn stacks_lists_only_compose_dirs() {
     assert!(out.contains("immich"), "should list the compose stack; got:\n{out}");
     assert!(!out.contains("notes"), "should not list a non-stack dir; got:\n{out}");
 }
+
+#[test]
+fn deploy_dry_run_takes_no_action() {
+    let dir = tempfile::tempdir().unwrap();
+    let compose = dir.path().join("docker-compose.yml");
+    std::fs::write(&compose, "services: {}\n").unwrap();
+
+    Command::cargo_bin("yd")
+        .unwrap()
+        .arg("deploy")
+        .arg(compose.to_str().unwrap())
+        .assert()
+        .success();
+
+    assert!(
+        !dir.path().join(".yd-history").exists(),
+        "a dry-run deploy must not snapshot or change anything"
+    );
+}
