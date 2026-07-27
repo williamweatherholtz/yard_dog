@@ -392,6 +392,24 @@ fn pin_add_then_list() {
 }
 
 #[test]
+fn new_instantiates_a_guardrail_clean_draft_stack() {
+    let dir = tempfile::tempdir().unwrap();
+    let into = dir.path().to_str().unwrap();
+    Command::cargo_bin("yd")
+        .unwrap()
+        .args(["new", "--into", into, "--name", "immich", "--kind", "datastore"])
+        .assert()
+        .success();
+    let compose = dir.path().join("immich").join("docker-compose.yml");
+    assert!(compose.exists(), "compose written");
+    // the fresh stack passes the guardrail check
+    Command::cargo_bin("yd").unwrap().arg("check").arg(compose.to_str().unwrap()).assert().success();
+    // and it starts in draft
+    let l = Command::cargo_bin("yd").unwrap().args(["lifecycle", "--repo", dir.path().join("immich").to_str().unwrap()]).assert().success();
+    assert!(String::from_utf8_lossy(&l.get_output().stdout).contains("draft"));
+}
+
+#[test]
 fn lifecycle_shows_default_and_transitions() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().to_str().unwrap();

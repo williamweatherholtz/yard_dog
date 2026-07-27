@@ -148,6 +148,19 @@ enum Command {
     },
     /// Check whether a newer Yard Dog release is available.
     SelfUpdate,
+    /// Instantiate a new guardrail-clean starter stack from a workload kind.
+    New {
+        #[arg(long)]
+        into: String,
+        #[arg(long)]
+        name: String,
+        /// datastore | web | worker | cron | proxy
+        #[arg(long)]
+        kind: String,
+        /// Service name inside the compose (defaults to the stack name).
+        #[arg(long)]
+        service: Option<String>,
+    },
     /// Show or transition a stack's lifecycle state (draft/active/deprecated/archived).
     Lifecycle {
         #[arg(long)]
@@ -234,6 +247,7 @@ fn main() {
         Command::Version { action } => run_version(action),
         Command::Pin { action } => run_pin(action),
         Command::SelfUpdate => run_self_update(),
+        Command::New { into, name, kind, service } => run_new(&into, &name, &kind, service.as_deref()),
         Command::Lifecycle { repo, event } => run_lifecycle(&repo, event.as_deref()),
     };
     if let Err(e) = result {
@@ -613,6 +627,16 @@ fn run_self_update() -> Result<(), String> {
     let current = env!("CARGO_PKG_VERSION");
     let status = yarddog::selfupdate::check(current, &NoReleaseInfo);
     println!("yd {current}: {status:?}");
+    Ok(())
+}
+
+fn run_new(into: &str, name: &str, kind: &str, service: Option<&str>) -> Result<(), String> {
+    let k = yarddog::workload::WorkloadKind::parse(kind)
+        .ok_or_else(|| format!("unknown kind '{kind}' (datastore|web|worker|cron|proxy)"))?;
+    let service = service.unwrap_or(name);
+    let compose = yarddog::instantiate::instantiate(std::path::Path::new(into), name, k, service)
+        .map_err(|e| format!("instantiate failed: {e}"))?;
+    println!("created {} (kind={}, lifecycle=draft)", compose.display(), k.as_str());
     Ok(())
 }
 

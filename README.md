@@ -88,6 +88,7 @@ Run `yd <command> --help` for full flags. Grouped by what they touch:
 ### Other
 | Command | Purpose |
 |---|---|
+| `yd new --into <dir> --name <n> --kind <k> [--service <s>]` | Instantiate a guardrail-clean starter stack for a workload kind (`datastore` / `web` / `worker` / `cron` / `proxy`), in the Draft lifecycle state. |
 | `yd lifecycle --repo <dir> [--event <e>]` | Show or transition a stack's lifecycle state; `<e>` = `activate` / `deprecate` / `archive` / `restore`. |
 | `yd import <compose> --into <dir> [--name <n>]` | Import an existing compose stack into a managed stacks directory. |
 | `yd pin add --repo <dir> --service <s>` / `yd pin list --repo <dir>` | Pin services to hold their updates. |
