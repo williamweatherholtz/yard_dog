@@ -268,3 +268,27 @@ fn notify_sends_message_to_stdout() {
     let out = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
     assert!(out.contains("hello-operator-42"), "got:\n{out}");
 }
+
+#[test]
+fn import_places_stack_under_target() {
+    let src = tempfile::tempdir().unwrap();
+    let compose = src.path().join("docker-compose.yml");
+    std::fs::write(&compose, "services: {}\n").unwrap();
+    let into = tempfile::tempdir().unwrap();
+
+    Command::cargo_bin("yd")
+        .unwrap()
+        .arg("import")
+        .arg(compose.to_str().unwrap())
+        .arg("--into")
+        .arg(into.path().to_str().unwrap())
+        .arg("--name")
+        .arg("adopted")
+        .assert()
+        .success();
+
+    assert!(
+        into.path().join("adopted").join("docker-compose.yml").exists(),
+        "imported stack should appear under the target dir"
+    );
+}

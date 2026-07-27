@@ -58,6 +58,17 @@ enum Command {
         #[arg(long)]
         root: String,
     },
+    /// Import an existing compose stack into a managed stacks directory.
+    Import {
+        /// Path to the existing compose file to import.
+        file: String,
+        /// Managed stacks directory to import into.
+        #[arg(long)]
+        into: String,
+        /// Stack name (defaults to the compose file's parent directory name).
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Send a notification through the default (stdout) channel.
     Notify {
         /// Message to send.
@@ -94,6 +105,7 @@ fn main() {
         } => run_backup(&file, plan, run, dest.as_deref()),
         Command::Deploy { file, yes } => run_deploy(&file, yes),
         Command::Stacks { root } => run_stacks(&root),
+        Command::Import { file, into, name } => run_import(&file, &into, name.as_deref()),
         Command::Notify { message } => run_notify(&message),
         Command::Verify { dest } => run_verify(&dest),
         Command::Prune { dest, keep } => run_prune(&dest, keep),
@@ -236,6 +248,21 @@ impl yarddog::deploy::BackupHook for RealBackupHook {
         println!("note: pre-change backup is a stub in this build (configure a backup dest to enable)");
         Ok(())
     }
+}
+
+fn run_import(file: &str, into: &str, name: Option<&str>) -> Result<(), String> {
+    let stack = yarddog::stacks::import_stack(
+        std::path::Path::new(file),
+        std::path::Path::new(into),
+        name,
+    )
+    .map_err(|e| format!("import failed: {e}"))?;
+    println!(
+        "imported stack '{}' -> {}",
+        stack.name,
+        stack.compose_path.display()
+    );
+    Ok(())
 }
 
 fn run_notify(message: &str) -> Result<(), String> {

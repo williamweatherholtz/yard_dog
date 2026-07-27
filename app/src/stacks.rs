@@ -116,6 +116,44 @@ pub fn rollback_config(
     Ok(true)
 }
 
+/// Import an existing compose file (+ sibling `.env`) into `stacks_root` as a
+/// named stack, without modifying the original. Refuses to overwrite an
+/// existing stack. `name` defaults to the compose file's parent directory name.
+pub fn import_stack(compose_path: &Path, stacks_root: &Path, name: Option<&str>) -> io::Result<Stack> {
+    let stack_name = match name {
+        Some(n) => n.to_string(),
+        None => compose_path
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "imported".to_string()),
+    };
+    let dest = stacks_root.join(&stack_name);
+    if dest.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("stack '{stack_name}' already exists"),
+        ));
+    }
+    std::fs::create_dir_all(&dest)?;
+
+    let file_name = compose_path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "compose path has no file name"))?;
+    let dest_compose = dest.join(file_name);
+    std::fs::copy(compose_path, &dest_compose)?;
+    if let Some(parent) = compose_path.parent() {
+        let env = parent.join(".env");
+        if env.is_file() {
+            std::fs::copy(&env, dest.join(".env"))?;
+        }
+    }
+    Ok(Stack {
+        name: stack_name,
+        compose_path: dest_compose,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +219,35 @@ mod tests {
         // confirmed -> restored
         assert!(rollback_config(&history, "1", &compose, true).unwrap());
         assert_eq!(std::fs::read_to_string(&compose).unwrap(), "good");
+    }
+
+    #[test]
+    fn import_copies_and_is_discoverable() {
+        let src = tempfile::tempdir().unwrap();
+        let compose = src.path().join("immich").join("docker-compose.yml");
+        touch(&compose, "services: {}");
+        std::fs::write(src.path().join("immich").join(".env"), "K=1").unwrap();
+        let stacks_root = tempfile::tempdir().unwrap();
+
+        let stack = import_stack(&compose, stacks_root.path(), None).unwrap();
+        assert_eq!(stack.name, "immich");
+        assert!(stacks_root.path().join("immich").join("docker-compose.yml").exists());
+        assert!(stacks_root.path().join("immich").join(".env").exists());
+        assert!(compose.exists(), "the original must be left untouched");
+
+        let found = discover_stacks(stacks_root.path()).unwrap();
+        assert!(found.iter().any(|s| s.name == "immich"));
+    }
+
+    #[test]
+    fn import_refuses_to_overwrite() {
+        let src = tempfile::tempdir().unwrap();
+        let compose = src.path().join("blog").join("compose.yml");
+        touch(&compose, "services: {}");
+        let stacks_root = tempfile::tempdir().unwrap();
+
+        import_stack(&compose, stacks_root.path(), None).unwrap();
+        let err = import_stack(&compose, stacks_root.path(), None).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
     }
 }
