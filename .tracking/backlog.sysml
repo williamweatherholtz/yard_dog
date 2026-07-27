@@ -25,11 +25,14 @@ package YardDogBacklog {
         part dedupeDeployUpgradeDoDR1 : TestResult { :>> id = "bc9eae8c-81fd-4721-934d-a02ee798aff3"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "323d525"; :>> judgedAt = "2026-07-27"; :>> judgedBy = "ai"; }
         action gitRestoreRemovesStray;
         verification gitRestoreRemovesStrayDoD : Test { :>> id = "45b7eef9-efff-4e1c-9c89-134f5e259ddc"; :>> method = VerificationMethod::test; :>> procedureText = "gitver::restore also removes files not present in the target commit (true restore), not only restoring tracked content; unit test asserts a file added after the target is gone after restore."; }
+        part gitRestoreRemovesStrayDoDR1 : TestResult { :>> id = "07988f7b-2611-42fa-bfaf-f84c7e17f5de"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "3beab6e"; :>> judgedAt = "2026-07-27"; :>> judgedBy = "ai"; }
         action addReadme;
         verification addReadmeDoD : Test { :>> id = "8ebaa895-28e7-4b44-9c89-134f5edebc18"; :>> method = VerificationMethod::test; :>> procedureText = "A README documents the yd commands + the safety model (backup/verify/git-versioning/safe-deploy/upgrade/guardrails); doc-sync keeps it current on commit."; }
         action regressRedeploys;
         verification regressRedeploysDoD : Test { :>> id = "a266f7a6-4821-47ea-a980-91bc36d827ae"; :>> method = VerificationMethod::test; :>> procedureText = "On regress, the FSM re-deploys the restored last-good config (not only restoring the file) so the live stack actually returns to the good version; unit test asserts the deployer is invoked a second time with the restored config and a still-failing rollback is surfaced (RegressFailed) rather than silently leaving broken containers up."; }
+        part regressRedeploysDoDR1 : TestResult { :>> id = "9e95ea19-fac7-4a5e-bfaf-f84c7f955712"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "3beab6e"; :>> judgedAt = "2026-07-27"; :>> judgedBy = "ai"; }
         action upgradeGuardrailPostApply;
         verification upgradeGuardrailPostApplyDoD : Test { :>> id = "64403433-8678-49b8-a557-f5961121d095"; :>> method = VerificationMethod::test; :>> procedureText = "For an upgrade, guardrails evaluate the POST-Apply compose (the image actually being deployed), so an upgrade that introduces a floating tag / plaintext secret is blocked and one that fixes a violation is not; unit test covers both directions."; }
+        part upgradeGuardrailPostApplyDoDR1 : TestResult { :>> id = "123280db-466b-419a-bfaf-f84c80e714ca"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "3beab6e"; :>> judgedAt = "2026-07-27"; :>> judgedBy = "ai"; }
     action def ProductBacklog { }
 }

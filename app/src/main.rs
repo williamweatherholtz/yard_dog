@@ -441,6 +441,10 @@ fn run_deploy(file: &str, yes: bool) -> Result<(), String> {
     if matches!(outcome, yarddog::deploy::DeployOutcome::Blocked(_)) {
         std::process::exit(3);
     }
+    if let yarddog::deploy::DeployOutcome::RollbackFailed(why) = &outcome {
+        eprintln!("CRITICAL: deploy failed and rollback did not recover — stack needs attention: {why}");
+        std::process::exit(4);
+    }
     Ok(())
 }
 
@@ -467,6 +471,10 @@ fn run_upgrade(
     println!("upgrade: {outcome:?}");
     if matches!(outcome, yarddog::upgrade::UpgradeOutcome::Blocked(_)) {
         std::process::exit(3);
+    }
+    if let yarddog::upgrade::UpgradeOutcome::RegressFailed(why) = &outcome {
+        eprintln!("CRITICAL: upgrade failed and rollback did not recover — stack needs attention: {why}");
+        std::process::exit(4);
     }
     Ok(())
 }

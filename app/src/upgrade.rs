@@ -12,15 +12,18 @@ use std::path::Path;
 pub enum UpgradeOutcome {
     Upgraded,
     Regressed(String),
+    /// Upgrade failed and the rollback redeploy also failed — needs attention.
+    RegressFailed(String),
     Skipped,
     Blocked(String),
     BackupFailed(String),
 }
 
-/// Rewrite a single service's `image` in the compose file, preserving the rest.
-pub fn set_service_image(compose_path: &Path, service: &str, image: &str) -> io::Result<()> {
-    let text = std::fs::read_to_string(compose_path)?;
-    let mut doc: serde_yaml::Value = serde_yaml::from_str(&text)
+/// Return `yaml` with a single service's `image` rewritten, preserving the rest.
+/// Pure over the text, so it also serves as a preview of what an upgrade will
+/// deploy (e.g. for guardrail evaluation) without touching disk.
+pub fn image_changed_yaml(yaml: &str, service: &str, image: &str) -> io::Result<String> {
+    let mut doc: serde_yaml::Value = serde_yaml::from_str(yaml)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     if let Some(svc) = doc
         .as_mapping_mut()
@@ -34,8 +37,13 @@ pub fn set_service_image(compose_path: &Path, service: &str, image: &str) -> io:
             serde_yaml::Value::from(image),
         );
     }
-    let out = serde_yaml::to_string(&doc)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    serde_yaml::to_string(&doc).map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+}
+
+/// Rewrite a single service's `image` in the compose file, preserving the rest.
+pub fn set_service_image(compose_path: &Path, service: &str, image: &str) -> io::Result<()> {
+    let text = std::fs::read_to_string(compose_path)?;
+    let out = image_changed_yaml(&text, service, image)?;
     std::fs::write(compose_path, out)
 }
 
@@ -65,6 +73,7 @@ pub fn safe_upgrade(
     Ok(match flow::run(&change, backup, deployer, &mut trace)? {
         Outcome::Upgraded | Outcome::Deployed => UpgradeOutcome::Upgraded,
         Outcome::Regressed(r) => UpgradeOutcome::Regressed(r),
+        Outcome::RegressFailed(r) => UpgradeOutcome::RegressFailed(r),
         Outcome::Skipped => UpgradeOutcome::Skipped,
         Outcome::Blocked(r) => UpgradeOutcome::Blocked(r),
         Outcome::BackupFailed(r) => UpgradeOutcome::BackupFailed(r),
@@ -83,10 +92,21 @@ mod tests {
             Ok(())
         }
     }
-    struct FailDeployer;
-    impl Deployer for FailDeployer {
+    /// Fails the health-gate on the first deploy, then succeeds — so the rollback
+    /// redeploy after a regress goes through.
+    #[derive(Default)]
+    struct FailThenOkDeployer {
+        failed_once: std::cell::RefCell<bool>,
+    }
+    impl Deployer for FailThenOkDeployer {
         fn deploy(&self, _d: &Path) -> io::Result<()> {
-            Err(io::Error::new(io::ErrorKind::Other, "unhealthy"))
+            let mut f = self.failed_once.borrow_mut();
+            if *f {
+                Ok(())
+            } else {
+                *f = true;
+                Err(io::Error::new(io::ErrorKind::Other, "unhealthy"))
+            }
         }
     }
     struct NoopBackup;
@@ -140,7 +160,7 @@ mod tests {
     #[test]
     fn upgrade_regresses_on_failed_healthcheck() {
         let (dir, compose) = repo_with_app();
-        let out = safe_upgrade(&compose, dir.path(), "app", "nginx:1.29", true, true, &NoopBackup, &FailDeployer).unwrap();
+        let out = safe_upgrade(&compose, dir.path(), "app", "nginx:1.29", true, true, &NoopBackup, &FailThenOkDeployer::default()).unwrap();
         assert!(matches!(out, UpgradeOutcome::Regressed(_)));
         assert_eq!(app_image(&compose), "nginx:1.27", "reverted on failure");
     }

@@ -34,6 +34,9 @@ pub enum Outcome {
     Deployed,
     Upgraded,
     Regressed(String),
+    /// The change failed AND the rollback redeploy also failed — the live stack
+    /// is in a bad state and needs operator attention.
+    RegressFailed(String),
     Skipped,
     Blocked(String),
     BackupFailed(String),
@@ -70,7 +73,16 @@ pub fn run(
     // a healthcheck is desired but absent — the health-gate is otherwise a no-op.
     trace.push(Phase::Guardrails);
     let yaml = std::fs::read_to_string(change.compose_path).unwrap_or_default();
-    let findings = run_guardrails(&yaml);
+    // For an upgrade, evaluate what will actually be deployed (post-Apply), not
+    // the stale on-disk image — else a floating tag / secret the upgrade would
+    // introduce is missed, and a violation the upgrade fixes wrongly blocks.
+    let effective = match change.image_change {
+        Some((service, image)) => {
+            crate::upgrade::image_changed_yaml(&yaml, service, image).unwrap_or_else(|_| yaml.clone())
+        }
+        None => yaml.clone(),
+    };
+    let findings = run_guardrails(&effective);
     if !verdict(&findings) {
         let blockers: Vec<String> = findings
             .iter()
@@ -116,15 +128,22 @@ pub fn run(
     }
 
     // Regress: unhealthy, or healthy-but-not-accepted. Restore the last-good
-    // commit so a failed change leaves the stack as it was.
+    // commit AND redeploy it, so the *running* stack — not just the file on
+    // disk — returns to the good version. If the rollback redeploy itself fails,
+    // the stack is in a bad state: report RegressFailed rather than a clean roll.
     trace.push(Phase::Regress);
-    if let Some(good) = prior {
-        gitver::restore(change.repo, &good)?;
-    }
     let reason = match health {
         Ok(()) => "healthy but not accepted".to_string(),
         Err(e) => e.to_string(),
     };
+    if let Some(good) = prior {
+        gitver::restore(change.repo, &good)?;
+        if let Err(e) = deployer.deploy(stack_dir) {
+            return Ok(Outcome::RegressFailed(format!(
+                "{reason}; rollback redeploy failed: {e}"
+            )));
+        }
+    }
     Ok(Outcome::Regressed(reason))
 }
 
@@ -139,12 +158,6 @@ mod tests {
             Ok(())
         }
     }
-    struct FailDeployer;
-    impl Deployer for FailDeployer {
-        fn deploy(&self, _d: &Path) -> io::Result<()> {
-            Err(io::Error::new(io::ErrorKind::Other, "unhealthy"))
-        }
-    }
     #[derive(Default)]
     struct SpyDeployer {
         called: RefCell<bool>,
@@ -153,6 +166,28 @@ mod tests {
         fn deploy(&self, _d: &Path) -> io::Result<()> {
             *self.called.borrow_mut() = true;
             Ok(())
+        }
+    }
+    /// Fails its first `fail_until` calls, then succeeds; counts every call.
+    struct CountingDeployer {
+        calls: RefCell<usize>,
+        fail_until: usize,
+    }
+    impl CountingDeployer {
+        fn new(fail_until: usize) -> Self {
+            Self { calls: RefCell::new(0), fail_until }
+        }
+    }
+    impl Deployer for CountingDeployer {
+        fn deploy(&self, _d: &Path) -> io::Result<()> {
+            let mut c = self.calls.borrow_mut();
+            let n = *c;
+            *c += 1;
+            if n < self.fail_until {
+                Err(io::Error::new(io::ErrorKind::Other, "unhealthy"))
+            } else {
+                Ok(())
+            }
         }
     }
     struct NoopBackup;
@@ -184,6 +219,44 @@ mod tests {
     #[test]
     fn deploy_up_args_wait_for_health() {
         assert!(compose_up_args().contains(&"--wait"), "gate must wait for health");
+    }
+
+    #[test]
+    fn upgrade_to_a_floating_tag_is_blocked_on_post_apply_content() {
+        // The current compose is clean (pinned tag); the upgrade would introduce
+        // a floating :latest tag. Guardrails must evaluate what is actually being
+        // deployed (post-Apply), so this is blocked before any deploy.
+        let (dir, compose) = repo("services:\n  app:\n    image: nginx:1.27\n");
+        let spy = SpyDeployer::default();
+        let ch = Change {
+            compose_path: &compose,
+            repo: dir.path(),
+            image_change: Some(("app", "nginx:latest")),
+            confirmed: true,
+            accept: true,
+        };
+        let mut trace = Vec::new();
+        let out = run(&ch, &NoopBackup, &spy, &mut trace).unwrap();
+        assert!(matches!(out, Outcome::Blocked(_)), "got {out:?}");
+        assert!(!*spy.called.borrow(), "must not deploy a blocked upgrade");
+        assert_eq!(trace, vec![Phase::Guardrails]);
+    }
+
+    #[test]
+    fn upgrade_that_fixes_a_floating_tag_is_not_blocked() {
+        // The current compose has a floating tag (would block a plain deploy);
+        // the upgrade pins it. Evaluating post-Apply content, the fix proceeds.
+        let (dir, compose) = repo("services:\n  app:\n    image: nginx:latest\n");
+        let ch = Change {
+            compose_path: &compose,
+            repo: dir.path(),
+            image_change: Some(("app", "nginx:1.29")),
+            confirmed: true,
+            accept: true,
+        };
+        let mut trace = Vec::new();
+        let out = run(&ch, &NoopBackup, &OkDeployer, &mut trace).unwrap();
+        assert_eq!(out, Outcome::Upgraded, "a floating-tag fix must not be blocked");
     }
 
     #[test]
@@ -219,11 +292,29 @@ mod tests {
     }
 
     #[test]
-    fn unhealthy_deploy_regresses() {
+    fn unhealthy_deploy_regresses_and_redeploys_last_good() {
+        // Health fails on the first deploy; the rollback redeploy (second call)
+        // succeeds, so the live stack is actually returned to the good version.
         let (dir, compose) = repo("services:\n  app:\n    image: nginx:1.27\n");
+        std::fs::write(&compose, "services:\n  app:\n    image: nginx:1.29\n").unwrap();
+        let deployer = CountingDeployer::new(1);
         let mut trace = Vec::new();
-        let out = run(&change(&compose, dir.path()), &NoopBackup, &FailDeployer, &mut trace).unwrap();
+        let out = run(&change(&compose, dir.path()), &NoopBackup, &deployer, &mut trace).unwrap();
         assert!(matches!(out, Outcome::Regressed(_)));
         assert_eq!(*trace.last().unwrap(), Phase::Regress);
+        assert_eq!(*deployer.calls.borrow(), 2, "regress must redeploy the restored config");
+    }
+
+    #[test]
+    fn regress_that_cannot_redeploy_reports_failure() {
+        // When even the rollback redeploy fails, the operator must be told the
+        // stack is in a bad state (RegressFailed), not that it rolled back cleanly.
+        let (dir, compose) = repo("services:\n  app:\n    image: nginx:1.27\n");
+        std::fs::write(&compose, "services:\n  app:\n    image: nginx:1.29\n").unwrap();
+        let deployer = CountingDeployer::new(usize::MAX);
+        let mut trace = Vec::new();
+        let out = run(&change(&compose, dir.path()), &NoopBackup, &deployer, &mut trace).unwrap();
+        assert!(matches!(out, Outcome::RegressFailed(_)), "got {out:?}");
+        assert_eq!(*deployer.calls.borrow(), 2, "attempted the rollback redeploy");
     }
 }

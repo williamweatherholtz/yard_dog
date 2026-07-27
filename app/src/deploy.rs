@@ -22,6 +22,8 @@ pub trait BackupHook {
 pub enum DeployOutcome {
     Deployed,
     RolledBack,
+    /// Deploy failed and the rollback redeploy also failed — needs attention.
+    RollbackFailed(String),
     Skipped,
     Blocked(String),
     BackupFailed(String),
@@ -50,6 +52,7 @@ pub fn safe_deploy(
     Ok(match flow::run(&change, backup, deployer, &mut trace)? {
         Outcome::Deployed | Outcome::Upgraded => DeployOutcome::Deployed,
         Outcome::Regressed(_) => DeployOutcome::RolledBack,
+        Outcome::RegressFailed(r) => DeployOutcome::RollbackFailed(r),
         Outcome::Skipped => DeployOutcome::Skipped,
         Outcome::Blocked(r) => DeployOutcome::Blocked(r),
         Outcome::BackupFailed(r) => DeployOutcome::BackupFailed(r),
@@ -68,10 +71,21 @@ mod tests {
             Ok(())
         }
     }
-    struct FailDeployer;
-    impl Deployer for FailDeployer {
+    /// Fails the first deploy (the health-gate), then succeeds — so the rollback
+    /// redeploy after a regress goes through.
+    #[derive(Default)]
+    struct FailThenOkDeployer {
+        failed_once: RefCell<bool>,
+    }
+    impl Deployer for FailThenOkDeployer {
         fn deploy(&self, _d: &Path) -> io::Result<()> {
-            Err(io::Error::new(io::ErrorKind::Other, "unhealthy"))
+            let mut f = self.failed_once.borrow_mut();
+            if *f {
+                Ok(())
+            } else {
+                *f = true;
+                Err(io::Error::new(io::ErrorKind::Other, "unhealthy"))
+            }
         }
     }
     #[derive(Default)]
@@ -126,7 +140,7 @@ mod tests {
         gitver::snapshot(dir.path(), "good").unwrap();
         std::fs::write(&compose, "broken").unwrap();
 
-        let out = safe_deploy(&compose, dir.path(), true, &RecBackup::default(), &FailDeployer).unwrap();
+        let out = safe_deploy(&compose, dir.path(), true, &RecBackup::default(), &FailThenOkDeployer::default()).unwrap();
         assert_eq!(out, DeployOutcome::RolledBack);
         assert_eq!(
             std::fs::read_to_string(&compose).unwrap(),

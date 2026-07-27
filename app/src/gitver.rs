@@ -91,6 +91,17 @@ pub fn restore(dir: &Path, sha: &str) -> io::Result<String> {
     // Bring tracked paths back to their state at `sha` (index + worktree),
     // without moving HEAD, then commit the result as a new snapshot.
     git_ok(dir, &["checkout", sha, "--", "."])?;
+    // `checkout -- .` reverts tracked content but leaves files added after `sha`
+    // in place. A faithful restore must also delete those, so the worktree
+    // matches the target commit exactly (else stray config survives a regress).
+    let in_target: std::collections::HashSet<String> = git_ok(dir, &["ls-tree", "-r", "--name-only", sha])?
+        .lines()
+        .map(|l| l.to_string())
+        .collect();
+    let tracked_now: Vec<String> = git_ok(dir, &["ls-files"])?.lines().map(|l| l.to_string()).collect();
+    for f in tracked_now.iter().filter(|f| !in_target.contains(*f)) {
+        git_ok(dir, &["rm", "-f", "--", f])?;
+    }
     git_ok(dir, &["add", "-A"])?;
     // Restoring to already-current content is a no-op; committing would fail.
     if git_ok(dir, &["status", "--porcelain"])?.trim().is_empty() {
@@ -150,6 +161,25 @@ mod tests {
         let s2 = snapshot(dir.path(), "again").unwrap();
         assert_eq!(s1, s2, "no change => same HEAD, no error, no new commit");
         assert_eq!(history(dir.path()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn restore_removes_files_added_after_the_target() {
+        // A faithful restore makes the worktree match the target commit — files
+        // added afterwards must be gone, not merely have their content reverted.
+        let dir = tempfile::tempdir().unwrap();
+        init(dir.path()).unwrap();
+        std::fs::write(dir.path().join("docker-compose.yml"), "v1").unwrap();
+        let good = snapshot(dir.path(), "good").unwrap();
+        std::fs::write(dir.path().join("override.yml"), "stray").unwrap();
+        snapshot(dir.path(), "added override").unwrap();
+
+        restore(dir.path(), &good).unwrap();
+        assert!(
+            !dir.path().join("override.yml").exists(),
+            "a file added after the target must be removed on restore"
+        );
+        assert_eq!(std::fs::read_to_string(dir.path().join("docker-compose.yml")).unwrap(), "v1");
     }
 
     #[test]
