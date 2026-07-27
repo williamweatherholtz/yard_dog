@@ -114,7 +114,19 @@ curl -fsSL https://raw.githubusercontent.com/williamweatherholtz/yard_dog/main/i
 ```powershell
 irm https://raw.githubusercontent.com/williamweatherholtz/yard_dog/main/install.ps1 | iex
 ```
-Prebuilt binaries (x86_64 + arm64 Linux, x86_64 + arm64 macOS, x86_64 Windows) and
+**Linux packages** — `.deb` and `.rpm` for **arm64** (Raspberry Pi / ARM homelab)
+and x86_64 are attached to each release:
+```sh
+# Debian/Ubuntu (arm64 shown; also x86_64)
+sudo dpkg -i yard-dog_*_arm64.deb        # or: sudo apt install ./yard-dog_*_arm64.deb
+# Fedora/RHEL
+sudo rpm -i yard-dog-*.aarch64.rpm
+```
+The package installs `/usr/bin/yd` plus a **disabled** `yd.service`; to run the
+control plane as a service, set `YD_ROOT` in `/etc/yard-dog/yd.env` then
+`sudo systemctl enable --now yd`.
+
+Prebuilt binaries (x86_64 + arm64 Linux, arm64 macOS, x86_64 Windows) and
 `SHA256SUMS` are attached to each [GitHub Release](https://github.com/williamweatherholtz/yard_dog/releases).
 Once installed, `yd self-update --apply` keeps it current (also SHA256-verified).
 

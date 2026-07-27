@@ -54,8 +54,40 @@ jobs:
           name: ${{ matrix.asset }}
           path: dist/${{ matrix.asset }}
 
-  release:
+  # Build native Linux packages (.deb + .rpm) for amd64 + arm64 from the linux
+  # binaries, via nfpm (one config, both formats). See packaging/nfpm.yaml.
+  package:
     needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: staging
+      - name: Build .deb + .rpm (amd64 + arm64)
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist out
+          for arch in amd64 arm64; do
+            case "$arch" in
+              amd64) bin=yd-x86_64-linux ;;
+              arm64) bin=yd-aarch64-linux ;;
+            esac
+            cp "staging/$bin/$bin" dist/yd
+            for pkg in deb rpm; do
+              docker run --rm -v "$PWD:/w" -w /w -e ARCH="$arch" -e VERSION="$VERSION" \
+                goreleaser/nfpm package -f packaging/nfpm.yaml -p "$pkg" -t out/
+            done
+          done
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: out/*
+
+  release:
+    needs: [build, package]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
