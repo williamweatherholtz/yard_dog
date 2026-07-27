@@ -1,0 +1,508 @@
+<title>Yard Dog — Competitive Landscape</title>
+<style>
+  :root {
+    --bg:#f4f7f9; --surface:#ffffff; --surface-2:#eef2f5; --border:#d8e0e6;
+    --text:#12181f; --text-dim:#59656f; --text-faint:#8a97a1;
+    --accent:#0e7c8b; --accent-soft:#d7edf1; --accent-line:#0e7c8b;
+    --full:#1f9d57; --full-bg:#dcf0e4; --part:#a9741a; --part-bg:#f5ebd2;
+    --none:#b0484a; --none-bg:#f1dede; --na:#69747f; --na-bg:#e7ecf0;
+    --danger:#c2410c;
+    --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, "Cascadia Code", "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --shadow: 0 1px 2px rgba(16,24,32,.04), 0 4px 16px rgba(16,24,32,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#0d1219; --surface:#131a23; --surface-2:#1a232e; --border:#26333f;
+      --text:#e6edf3; --text-dim:#93a1af; --text-faint:#647383;
+      --accent:#2bb7cb; --accent-soft:#0f2f37; --accent-line:#2bb7cb;
+      --full:#3fb950; --full-bg:#123522; --part:#d6a838; --part-bg:#37300f;
+      --none:#df8080; --none-bg:#3a2222; --na:#7c8b99; --na-bg:#1d2731;
+      --danger:#f0883e;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 22px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg:#f4f7f9; --surface:#ffffff; --surface-2:#eef2f5; --border:#d8e0e6;
+    --text:#12181f; --text-dim:#59656f; --text-faint:#8a97a1;
+    --accent:#0e7c8b; --accent-soft:#d7edf1;
+    --full:#1f9d57; --full-bg:#dcf0e4; --part:#a9741a; --part-bg:#f5ebd2;
+    --none:#b0484a; --none-bg:#f1dede; --na:#69747f; --na-bg:#e7ecf0; --danger:#c2410c;
+  }
+  :root[data-theme="dark"] {
+    --bg:#0d1219; --surface:#131a23; --surface-2:#1a232e; --border:#26333f;
+    --text:#e6edf3; --text-dim:#93a1af; --text-faint:#647383;
+    --accent:#2bb7cb; --accent-soft:#0f2f37;
+    --full:#3fb950; --full-bg:#123522; --part:#d6a838; --part-bg:#37300f;
+    --none:#df8080; --none-bg:#3a2222; --na:#7c8b99; --na-bg:#1d2731; --danger:#f0883e;
+  }
+
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:var(--font-sans);
+    line-height:1.55; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:1180px; margin:0 auto; padding:clamp(1.5rem,4vw,3.5rem) clamp(1rem,4vw,2rem) 4rem; }
+  .prose { max-width:70ch; }
+
+  /* ---- header ---- */
+  .eyebrow { font-family:var(--font-mono); font-size:.72rem; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--accent); display:flex; align-items:center; gap:.6rem; margin-bottom:1.1rem; }
+  .eyebrow::before { content:""; width:1.6rem; height:2px; background:var(--accent-line); border-radius:2px; }
+  h1 { font-size:clamp(2rem,5.5vw,3.4rem); line-height:1.04; letter-spacing:-.02em; margin:0 0 .6rem;
+    text-wrap:balance; font-weight:680; }
+  h1 .brand { font-family:var(--font-mono); color:var(--accent); font-weight:600; letter-spacing:-.01em; }
+  .lede { font-size:clamp(1.05rem,2.2vw,1.28rem); color:var(--text-dim); max-width:64ch; text-wrap:pretty; }
+  .meta-row { display:flex; flex-wrap:wrap; gap:.5rem 1.4rem; margin-top:1.6rem; font-family:var(--font-mono);
+    font-size:.76rem; color:var(--text-faint); }
+  .meta-row b { color:var(--text-dim); font-weight:600; }
+
+  /* ---- verdict cards ---- */
+  .verdict { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:1rem;
+    margin:2.6rem 0 1rem; }
+  .vcard { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:1.25rem 1.3rem;
+    box-shadow:var(--shadow); position:relative; overflow:hidden; }
+  .vcard::before { content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--none); }
+  .vcard .k { font-family:var(--font-mono); font-size:.7rem; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--text-faint); margin-bottom:.5rem; }
+  .vcard .big { font-size:1.55rem; font-weight:700; letter-spacing:-.01em; line-height:1.1; margin-bottom:.35rem; }
+  .vcard p { margin:0; font-size:.9rem; color:var(--text-dim); }
+
+  section { margin-top:3.4rem; }
+  h2 { font-size:clamp(1.3rem,3vw,1.7rem); letter-spacing:-.015em; margin:0 0 .4rem; font-weight:660; }
+  .section-sub { color:var(--text-dim); margin:0 0 1.4rem; max-width:66ch; }
+
+  /* ---- pillars ---- */
+  .pillars { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+  @media (max-width:640px){ .pillars{ grid-template-columns:1fr; } }
+  .pillar { background:var(--surface-2); border:1px solid var(--border); border-radius:14px; padding:1.3rem 1.4rem; }
+  .pillar h3 { margin:0 0 .3rem; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem; }
+  .pillar h3 span { font-family:var(--font-mono); font-size:.72rem; color:var(--accent); border:1px solid var(--accent);
+    border-radius:20px; padding:.05rem .5rem; }
+  .pillar ul { margin:.7rem 0 0; padding-left:1.1rem; color:var(--text-dim); font-size:.9rem; }
+  .pillar li { margin:.3rem 0; }
+
+  /* ---- legend ---- */
+  .legend { display:flex; flex-wrap:wrap; gap:.5rem .9rem; margin:0 0 1rem; font-size:.8rem;
+    font-family:var(--font-mono); color:var(--text-dim); align-items:center; }
+  .legend .pill { pointer-events:none; }
+
+  /* ---- matrix ---- */
+  .scroller { overflow-x:auto; border:1px solid var(--border); border-radius:14px; background:var(--surface);
+    box-shadow:var(--shadow); }
+  table { border-collapse:collapse; width:100%; min-width:940px; font-size:.83rem; }
+  thead th { position:sticky; top:0; background:var(--surface-2); text-align:left; font-weight:600;
+    font-family:var(--font-mono); font-size:.68rem; letter-spacing:.05em; text-transform:uppercase;
+    color:var(--text-dim); padding:.7rem .7rem; border-bottom:1px solid var(--border); white-space:nowrap; }
+  thead th.grp { color:var(--accent); border-bottom:1px solid var(--accent); }
+  tbody td { padding:.55rem .7rem; border-bottom:1px solid var(--border); vertical-align:middle; }
+  tbody tr:hover td { background:var(--surface-2); }
+  .tool { font-family:var(--font-mono); font-weight:600; white-space:nowrap; }
+  .scope { font-family:var(--font-mono); font-size:.72rem; color:var(--text-faint); white-space:nowrap; }
+  .lic { font-family:var(--font-mono); font-size:.72rem; color:var(--text-dim); white-space:nowrap; }
+  .grouprow td { background:var(--surface-2); font-family:var(--font-mono); font-size:.7rem; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--accent); font-weight:600; padding:.5rem .7rem; border-bottom:1px solid var(--border); }
+
+  .pill { display:inline-flex; align-items:center; gap:.3rem; font-family:var(--font-mono); font-size:.72rem;
+    font-weight:600; padding:.12rem .5rem; border-radius:20px; white-space:nowrap; line-height:1.4; }
+  .pill.full { color:var(--full); background:var(--full-bg); }
+  .pill.part { color:var(--part); background:var(--part-bg); }
+  .pill.none { color:var(--none); background:var(--none-bg); }
+  .pill.na   { color:var(--na);   background:var(--na-bg); }
+  .cell-note { display:block; font-size:.68rem; color:var(--text-faint); margin-top:.15rem; white-space:nowrap; }
+  .foot { display:inline-block; color:var(--danger); font-weight:700; cursor:help; }
+  .vfinal { font-family:var(--font-mono); font-weight:700; font-size:.75rem; }
+  .vfinal.none { color:var(--none); } .vfinal.part { color:var(--part); }
+
+  /* ---- contenders ---- */
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(255px,1fr)); gap:1rem; }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:1.2rem 1.3rem;
+    box-shadow:var(--shadow); }
+  .card h4 { margin:0 0 .15rem; font-family:var(--font-mono); font-size:1rem; }
+  .card .tag { font-family:var(--font-mono); font-size:.68rem; color:var(--accent); letter-spacing:.05em;
+    text-transform:uppercase; }
+  .card p { margin:.6rem 0 0; font-size:.87rem; color:var(--text-dim); }
+  .card .miss { margin-top:.6rem; font-size:.82rem; color:var(--none); }
+  .card .miss b { font-family:var(--font-mono); font-weight:600; }
+
+  /* ---- gap callout ---- */
+  .gap { background:linear-gradient(180deg,var(--accent-soft),transparent); border:1px solid var(--border);
+    border-left:3px solid var(--accent); border-radius:14px; padding:1.6rem 1.7rem; }
+  .gap ul { margin:.8rem 0 0; padding-left:1.2rem; }
+  .gap li { margin:.45rem 0; }
+  .gap b { color:var(--text); }
+  code { font-family:var(--font-mono); font-size:.86em; background:var(--surface-2); padding:.08rem .35rem;
+    border-radius:5px; border:1px solid var(--border); }
+
+  footer { margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--border); color:var(--text-faint);
+    font-size:.78rem; font-family:var(--font-mono); }
+  a { color:var(--accent); }
+  @media (prefers-reduced-motion:no-preference){
+    .vcard,.card,.pillar { animation:rise .5s cubic-bezier(.2,.7,.3,1) both; }
+    @keyframes rise { from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:none;} }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Competitive landscape · 30 tools · 5 categories</div>
+    <h1>Nobody already builds <span class="brand">Yard&nbsp;Dog</span>.</h1>
+    <p class="lede">Across 30 container-management and backup tools, <b>not one</b> combines accurate mount-path
+      intelligence with database-respecting backup of arbitrary Compose stacks. The ingredients all exist —
+      scattered across tools that each solve half the problem, or bolt-on scripts that leave the wiring to you.</p>
+    <div class="meta-row">
+      <span><b>Scope tested:</b> path typing · existence guard · DB-consistent backup · volume+bind coverage · remote/retention</span>
+      <span><b>Compiled:</b> 2026-07-26</span>
+    </div>
+  </header>
+
+  <div class="verdict">
+    <div class="vcard">
+      <div class="k">Pillar 1 · Path typing</div>
+      <div class="big">0 of 30</div>
+      <p>classify all four types — host bind · named volume · anonymous · network (NFS/CIFS). The best stop at bind-vs-volume.</p>
+    </div>
+    <div class="vcard">
+      <div class="k">Pillar 1 · Existence guard</div>
+      <div class="big">0 of 30</div>
+      <p>warn before deploy <em>and</em> refuse to silently create a missing host path. Most inherit Docker's root-owned auto-create footgun.</p>
+    </div>
+    <div class="vcard">
+      <div class="k">Pillar 2 · DB-aware backup</div>
+      <div class="big">0 of 30</div>
+      <p>do application-consistent DB backup of an <em>arbitrary</em> stack's volumes <em>and</em> binds to a remote target. DB dumps only ever cover the tool's own managed databases.</p>
+    </div>
+  </div>
+
+  <section>
+    <h2>The two pillars, defined</h2>
+    <p class="section-sub">These are the co-equal differentiators the landscape leaves open. Every tool below is scored against them.</p>
+    <div class="pillars">
+      <div class="pillar">
+        <h3>Path intelligence <span>pillar 1</span></h3>
+        <ul>
+          <li><b>Type accuracy</b> — is a mount a host bind, a named Docker volume, an anonymous/container-only path, or a network (NFS/CIFS/SMB) path? Correctly, before deploy.</li>
+          <li><b>Existence awareness</b> — does the referenced host path already exist, and does the tool <em>refuse</em> to erroneously create it (the Portainer / Docker-CLI footgun)?</li>
+        </ul>
+      </div>
+      <div class="pillar">
+        <h3>Backup integrity <span>pillar 2</span></h3>
+        <ul>
+          <li><b>Application-consistent</b> — databases quiesced or logically dumped, not raw copies of live files.</li>
+          <li><b>Full coverage</b> — named volumes <em>and</em> bind/host paths of any stack, not just managed DBs or the tool's own config.</li>
+          <li><b>Remote + retention</b> — off-box destinations on a schedule with rotation.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>The scorecard</h2>
+    <p class="section-sub">30 tools in five bands. Backup columns judge coverage of <em>arbitrary</em> stacks, not the tool's own metadata. ⚠ marks silent auto-create of a missing host path.</p>
+    <div class="legend">
+      <span>Legend:</span>
+      <span class="pill full">Yes</span>
+      <span class="pill part">Partial</span>
+      <span class="pill none">No</span>
+      <span class="pill na">n/a</span>
+      <span><span class="foot">⚠</span> silent auto-create footgun</span>
+    </div>
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr>
+            <th>Tool</th><th>Scope</th>
+            <th class="grp">Path&nbsp;type</th><th class="grp">Guards&nbsp;existence</th>
+            <th class="grp">DB-consistent</th><th class="grp">Vol&nbsp;+&nbsp;bind</th><th class="grp">Remote&nbsp;+&nbsp;retention</th>
+            <th>License</th><th>Verdict</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="grouprow"><td colspan="9">A · Compose &amp; stack managers — the home turf</td></tr>
+
+          <tr><td class="tool">Portainer CE</td><td class="scope">Docker/Compose/Swarm/K8s</td>
+            <td><span class="pill part">Partial</span><span class="cell-note">bind vs volume</span></td>
+            <td><span class="pill none">No</span><span class="cell-note"><span class="foot">⚠</span> root-owned dir</span></td>
+            <td><span class="pill none">No</span><span class="cell-note">config export only</span></td>
+            <td><span class="pill none">No</span></td>
+            <td><span class="pill none">No</span></td>
+            <td class="lic">zlib · OSS</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr><td class="tool">Portainer BE</td><td class="scope">Docker/Compose/Swarm/K8s</td>
+            <td><span class="pill part">Partial</span></td>
+            <td><span class="pill none">No</span><span class="cell-note"><span class="foot">⚠</span></span></td>
+            <td><span class="pill none">No</span><span class="cell-note">config only</span></td>
+            <td><span class="pill none">No</span></td>
+            <td><span class="pill part">Config→S3</span><span class="cell-note">own config only</span></td>
+            <td class="lic">Proprietary</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr><td class="tool">Dockge</td><td class="scope">Compose only</td>
+            <td><span class="pill none">No</span><span class="cell-note">opaque YAML</span></td>
+            <td><span class="pill none">No</span><span class="cell-note"><span class="foot">⚠</span></span></td>
+            <td><span class="pill none">No</span></td><td><span class="pill none">No</span></td><td><span class="pill none">No</span></td>
+            <td class="lic">MIT · OSS</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr><td class="tool">Yacht</td><td class="scope">Docker + templates</td>
+            <td><span class="pill none">No</span></td>
+            <td><span class="pill none">No</span><span class="cell-note"><span class="foot">⚠</span></span></td>
+            <td><span class="pill none">No</span></td><td><span class="pill none">No</span></td><td><span class="pill none">No</span></td>
+            <td class="lic">MIT · abandoned</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr><td class="tool">Komodo</td><td class="scope">Docker/Compose/Swarm</td>
+            <td><span class="pill none">No</span></td>
+            <td><span class="pill none">No</span><span class="cell-note"><span class="foot">⚠</span></span></td>
+            <td><span class="pill part">Self&nbsp;DB</span><span class="cell-note">its own metadata DB</span></td>
+            <td><span class="pill none">No</span></td>
+            <td><span class="pill part">Own&nbsp;DB</span><span class="cell-note">sched + retention</span></td>
+            <td class="lic">GPL-3 · OSS</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr><td class="tool">Swarmpit</td><td class="scope">Docker Swarm</td>
+            <td><span class="pill part">Partial</span><span class="cell-note">swarm mount type</span></td>
+            <td><span class="pill none">No</span><span class="cell-note"><span class="foot">⚠</span></span></td>
+            <td><span class="pill none">No</span></td><td><span class="pill none">No</span></td><td><span class="pill none">No</span></td>
+            <td class="lic">EPL · OSS</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr class="grouprow"><td colspan="9">B · Homelab app-store OSes</td></tr>
+
+          <tr><td class="tool">CasaOS</td><td class="scope">Docker/Compose</td>
+            <td><span class="pill none">No</span><span class="cell-note">volumes→binds</span></td>
+            <td><span class="pill none">No</span><span class="cell-note"><span class="foot">⚠</span></span></td>
+            <td><span class="pill none">No</span></td>
+            <td><span class="pill part">Folder&nbsp;copy</span></td>
+            <td><span class="pill none">No</span></td>
+            <td class="lic">Apache-2 · OSS</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr><td class="tool">Umbrel</td><td class="scope">Docker/Compose</td>
+            <td><span class="pill none">No</span><span class="cell-note">all binds</span></td>
+            <td><span class="pill none">No</span></td>
+            <td><span class="pill none">No</span><span class="cell-note">file snapshots (Kopia)</span></td>
+            <td><span class="pill part">Files</span></td>
+            <td><span class="pill part">Umbrel/NAS</span><span class="cell-note">no S3</span></td>
+            <td class="lic">PolyForm · SA</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr><td class="tool">Runtipi</td><td class="scope">Docker/Compose</td>
+            <td><span class="pill part">Partial</span><span class="cell-note">typed binds</span></td>
+            <td><span class="pill none">No</span></td>
+            <td><span class="pill full">Yes</span><span class="cell-note">stops apps</span></td>
+            <td><span class="pill part">Bind</span><span class="cell-note">vol unverified</span></td>
+            <td><span class="pill none">Local</span></td>
+            <td class="lic">GPL-3 · OSS</td><td><span class="vfinal part">PARTIAL</span></td></tr>
+
+          <tr><td class="tool">Cosmos</td><td class="scope">Docker/Compose</td>
+            <td><span class="pill part">Partial</span><span class="cell-note">bind vs volume</span></td>
+            <td><span class="pill none">No</span></td>
+            <td><span class="pill part">Stop-only</span><span class="cell-note">not DB-aware</span></td>
+            <td><span class="pill full">Yes</span><span class="cell-note">Restic</span></td>
+            <td><span class="pill full">Yes</span><span class="cell-note">Rclone + cron</span></td>
+            <td class="lic">Apache+CC · SA</td><td><span class="vfinal part">PARTIAL</span></td></tr>
+
+          <tr><td class="tool">DockSTARTer</td><td class="scope">Compose (CLI gen)</td>
+            <td><span class="pill none">No</span></td>
+            <td><span class="pill none">No</span><span class="cell-note"><span class="foot">⚠</span> mkdir -p</span></td>
+            <td><span class="pill none">No</span></td><td><span class="pill none">No</span></td><td><span class="pill none">No</span></td>
+            <td class="lic">MIT · OSS</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr><td class="tool">YunoHost</td><td class="scope">Native Debian (no Docker)</td>
+            <td><span class="pill na">n/a</span></td>
+            <td><span class="pill part">Self-managed</span></td>
+            <td><span class="pill full">Yes</span><span class="cell-note">SQL dumps</span></td>
+            <td><span class="pill full">Tar</span></td>
+            <td><span class="pill part">Borg add-on</span></td>
+            <td class="lic">AGPL-3 · OSS</td><td><span class="vfinal part">PARTIAL</span></td></tr>
+
+          <tr class="grouprow"><td colspan="9">C · Self-hosted PaaS</td></tr>
+
+          <tr><td class="tool">Coolify</td><td class="scope">Docker/Compose</td>
+            <td><span class="pill part">Partial</span><span class="cell-note">buggy bind/vol</span></td>
+            <td><span class="pill none">No</span><span class="cell-note"><span class="foot">⚠</span> data-loss</span></td>
+            <td><span class="pill part">Managed&nbsp;DBs</span><span class="cell-note">dumps, mgd only</span></td>
+            <td><span class="pill none">No</span></td>
+            <td><span class="pill full">S3 + cron</span></td>
+            <td class="lic">Apache-2 · OSS</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr><td class="tool">Dokploy</td><td class="scope">Docker/Swarm/Compose</td>
+            <td><span class="pill full">Yes</span><span class="cell-note">bind/vol/file</span></td>
+            <td><span class="pill none">No</span><span class="cell-note"><span class="foot">⚠</span></span></td>
+            <td><span class="pill part">Managed&nbsp;DBs</span><span class="cell-note">dumps</span></td>
+            <td><span class="pill part">Named&nbsp;vol</span><span class="cell-note">binds excluded</span></td>
+            <td><span class="pill full">S3 + cron</span></td>
+            <td class="lic">Apache-2 · OSS</td><td><span class="vfinal part">PARTIAL</span></td></tr>
+
+          <tr><td class="tool">CapRover</td><td class="scope">Docker Swarm</td>
+            <td><span class="pill part">Partial</span></td>
+            <td><span class="pill part">Must pre-exist</span><span class="cell-note">no auto-create</span></td>
+            <td><span class="pill none">No</span></td>
+            <td><span class="pill none">No</span><span class="cell-note">excl. volumes</span></td>
+            <td><span class="pill none">No</span></td>
+            <td class="lic">Apache-2 · OSS</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr><td class="tool">Dokku</td><td class="scope">Single-host Docker</td>
+            <td><span class="pill part">Partial</span><span class="cell-note">opaque src:dst</span></td>
+            <td><span class="pill part">Must pre-exist</span></td>
+            <td><span class="pill part">DB&nbsp;plugins</span><span class="cell-note">dumps</span></td>
+            <td><span class="pill none">No</span></td>
+            <td><span class="pill full">S3 + cron + GPG</span></td>
+            <td class="lic">MIT · OSS</td><td><span class="vfinal part">PARTIAL</span></td></tr>
+
+          <tr><td class="tool">Rancher</td><td class="scope">Kubernetes only</td>
+            <td><span class="pill full">Yes</span><span class="cell-note">native K8s</span></td>
+            <td><span class="pill part">Typed</span><span class="cell-note">DirectoryOrCreate</span></td>
+            <td><span class="pill none">No</span><span class="cell-note">add-ons only</span></td>
+            <td><span class="pill part">Longhorn</span><span class="cell-note">crash-consistent</span></td>
+            <td><span class="pill part">Add-ons</span></td>
+            <td class="lic">Apache-2 · OSS</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr><td class="tool">Nomad</td><td class="scope">Own orch · Docker driver</td>
+            <td><span class="pill part">Partial</span><span class="cell-note">bind/vol/tmpfs</span></td>
+            <td><span class="pill part">Pre-register</span></td>
+            <td><span class="pill none">No</span></td>
+            <td><span class="pill part">CSI snap</span><span class="cell-note">crash-consistent</span></td>
+            <td><span class="pill part">State→S3</span><span class="cell-note">Ent · cluster state</span></td>
+            <td class="lic">BUSL · SA</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr class="grouprow"><td colspan="9">D · Desktop / CLI / Kubernetes UIs</td></tr>
+
+          <tr><td class="tool">Docker Desktop</td><td class="scope">Docker/Compose/K8s</td>
+            <td><span class="pill part">Partial</span><span class="cell-note">picker + vol tab</span></td>
+            <td><span class="pill none">No</span><span class="cell-note"><span class="foot">⚠</span> no warn</span></td>
+            <td><span class="pill part">Crash-consist</span><span class="cell-note">stop, no dump</span></td>
+            <td><span class="pill part">Volumes</span></td>
+            <td><span class="pill part">Paid</span><span class="cell-note">S3/schedule = paid</span></td>
+            <td class="lic">Proprietary</td><td><span class="vfinal part">PARTIAL</span></td></tr>
+
+          <tr><td class="tool">Podman Desktop</td><td class="scope">Podman/Compose/K8s</td>
+            <td><span class="pill part">Partial</span></td>
+            <td><span class="pill part">Errors on miss</span><span class="cell-note">safer default</span></td>
+            <td><span class="pill none">No</span></td><td><span class="pill none">No</span></td><td><span class="pill none">No</span></td>
+            <td class="lic">Apache-2 · OSS</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr><td class="tool">Cockpit + podman</td><td class="scope">Podman only</td>
+            <td><span class="pill part">Bind only</span></td>
+            <td><span class="pill part">Errors on miss</span></td>
+            <td><span class="pill none">No</span></td><td><span class="pill none">No</span></td><td><span class="pill none">No</span></td>
+            <td class="lic">LGPL · OSS</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr><td class="tool">Lazydocker</td><td class="scope">Docker/Compose (TUI)</td>
+            <td><span class="pill none">No</span><span class="cell-note">monitor only</span></td>
+            <td><span class="pill na">n/a</span></td>
+            <td><span class="pill none">No</span></td><td><span class="pill none">No</span></td><td><span class="pill none">No</span></td>
+            <td class="lic">MIT · OSS</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr><td class="tool">Lens</td><td class="scope">Kubernetes only</td>
+            <td><span class="pill part">K8s types</span></td>
+            <td><span class="pill na">n/a</span></td>
+            <td><span class="pill none">No</span></td><td><span class="pill none">No</span></td><td><span class="pill none">No</span></td>
+            <td class="lic">Proprietary</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr><td class="tool">k9s</td><td class="scope">Kubernetes only (TUI)</td>
+            <td><span class="pill none">No</span></td>
+            <td><span class="pill na">n/a</span></td>
+            <td><span class="pill none">No</span></td><td><span class="pill none">No</span></td><td><span class="pill none">No</span></td>
+            <td class="lic">Apache-2 · OSS</td><td><span class="vfinal none">NO</span></td></tr>
+
+          <tr class="grouprow"><td colspan="9">E · Backup specialists — bolt-on add-ons, no management UI</td></tr>
+
+          <tr><td class="tool">offen/docker-volume-backup</td><td class="scope">backup add-on</td>
+            <td><span class="pill na">n/a</span></td><td><span class="pill na">n/a</span></td>
+            <td><span class="pill part">Hooks</span><span class="cell-note">manual per-container</span></td>
+            <td><span class="pill full">Yes</span><span class="cell-note">vol+bind+any</span></td>
+            <td><span class="pill full">S3/WebDAV/…</span><span class="cell-note">GPG + rotation</span></td>
+            <td class="lic">MPL-2 · OSS</td><td><span class="vfinal part">no UI/auto</span></td></tr>
+
+          <tr><td class="tool">restic + Docker (resticker)</td><td class="scope">backup add-on</td>
+            <td><span class="pill na">n/a</span></td><td><span class="pill na">n/a</span></td>
+            <td><span class="pill part">Manual dump</span><span class="cell-note">PRE_COMMANDS</span></td>
+            <td><span class="pill full">Yes</span></td>
+            <td><span class="pill full">All backends</span><span class="cell-note">encrypted</span></td>
+            <td class="lic">BSD/MIT · OSS</td><td><span class="vfinal part">fully DIY</span></td></tr>
+
+          <tr><td class="tool">Nautical Backup</td><td class="scope">backup add-on</td>
+            <td><span class="pill na">n/a</span></td><td><span class="pill na">n/a</span></td>
+            <td><span class="pill part">Stop-and-copy</span><span class="cell-note">no dump</span></td>
+            <td><span class="pill part">Bind-centric</span></td>
+            <td><span class="pill part">rsync target</span><span class="cell-note">no cloud/encrypt</span></td>
+            <td class="lic">GPL-3 · OSS</td><td><span class="vfinal part">no dumps</span></td></tr>
+
+          <tr><td class="tool">Bivac</td><td class="scope">backup add-on</td>
+            <td><span class="pill na">n/a</span></td><td><span class="pill na">n/a</span></td>
+            <td><span class="pill full">Auto dumps</span><span class="cell-note">PG/MySQL/Mongo</span></td>
+            <td><span class="pill part">Volumes</span><span class="cell-note">attachment-aware</span></td>
+            <td><span class="pill part">S3/Swift</span></td>
+            <td class="lic">Apache-2 · dormant</td><td><span class="vfinal none">abandoned</span></td></tr>
+
+          <tr><td class="tool">Duplicati</td><td class="scope">backup add-on</td>
+            <td><span class="pill na">n/a</span></td><td><span class="pill na">n/a</span></td>
+            <td><span class="pill none">No</span><span class="cell-note">live file copy</span></td>
+            <td><span class="pill part">Paths</span></td>
+            <td><span class="pill full">Many + AES</span><span class="cell-note">has UI</span></td>
+            <td class="lic">MIT · OSS</td><td><span class="vfinal none">no DB/topology</span></td></tr>
+
+          <tr><td class="tool">Velero <span style="color:var(--text-faint)">(K8s, for contrast)</span></td><td class="scope">Kubernetes only</td>
+            <td><span class="pill na">n/a</span></td><td><span class="pill na">n/a</span></td>
+            <td><span class="pill full">Pod hooks</span></td>
+            <td><span class="pill full">PVs</span></td>
+            <td><span class="pill full">S3/GCS/Azure</span></td>
+            <td class="lic">Apache-2 · OSS</td><td><span class="vfinal none">K8s only</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Closest contenders — and exactly where each falls short</h2>
+    <p class="section-sub">Four tools get one pillar substantially right. None gets both, and none guards host-path existence.</p>
+    <div class="cards">
+      <div class="card">
+        <div class="tag">best path typing</div>
+        <h4>Dokploy</h4>
+        <p>The only manager with genuinely typed mount forms — Volume / Bind / File as distinct UI objects — plus real DB dumps and named-volume backup.</p>
+        <div class="miss">Misses: <b>bind-mount data is explicitly excluded</b> from backup; DB dumps cover only managed databases; no network-path type; no existence check.</div>
+      </div>
+      <div class="card">
+        <div class="tag">best backup breadth</div>
+        <h4>Cosmos</h4>
+        <p>Restic-backed backups of both named volumes and binds, to any Rclone remote, with cron + retention + encryption. Explicit bind-vs-volume typing.</p>
+        <div class="miss">Misses: backup is <b>only file-consistent via optional container-stop</b> — no DB dump/quiesce; no anonymous/network typing; no existence guard.</div>
+      </div>
+      <div class="card">
+        <div class="tag">best DB-consistency (Docker)</div>
+        <h4>Runtipi</h4>
+        <p>Stops apps before backup for genuine app-consistency, on a schedule with retention and one-click restore.</p>
+        <div class="miss">Misses: <b>local-only</b> (no remote); named-volume coverage unverified; only partial typing; no existence guard.</div>
+      </div>
+      <div class="card">
+        <div class="tag">most integration-shaped</div>
+        <h4>offen · Bivac</h4>
+        <p>offen gives volume+bind+remote+encryption with dump hooks; Bivac even auto-detected DB datadirs and dumped them — the exact pattern we want.</p>
+        <div class="miss">Misses: offen wires <b>every dump by hand per container</b> and has no UI; <b>Bivac is abandoned (~2020)</b>. The integrated version was never sustained.</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>The gap Yard Dog fills</h2>
+    <div class="gap prose">
+      <p>The capability isn't missing — the <b>integration is</b>. Every primitive already ships somewhere:
+        logical DB dumps (offen, resticker, Bivac, Coolify/Dokploy for managed DBs), stop-and-copy quiescence
+        (Nautical, Runtipi, Cosmos), and encrypted remote storage with retention (restic, Duplicati, Rclone backends).
+        What no maintained tool combines:</p>
+      <ul>
+        <li><b>Path-type intelligence as a first-class model</b> — host bind vs named volume vs anonymous vs
+          <em>network</em> (NFS/CIFS/SMB). Today the ceiling is a bind-vs-volume toggle; network paths are typed
+          <em>nowhere</em>.</li>
+        <li><b>Existence as a safety guard</b> — tell the operator whether a host path exists and
+          <em>refuse</em> to silently <code>mkdir</code> it. Only Podman/CapRover/Dokku avoid the footgun, and none
+          surfaces it as a deliberate UX; the rest inherit Docker's root-owned auto-create.</li>
+        <li><b>Automatic, topology-aware DB backup</b> — detect "this container is Postgres → dump it" across an
+          <em>arbitrary</em> Compose stack, covering both its volumes and its binds, to a remote target — instead of
+          hand-wiring a <code>docker exec pg_dump</code> per service or being limited to the tool's own managed databases.</li>
+      </ul>
+      <p style="margin-top:1rem">In one line: <b>the market splits path-typing tools, DB-dump tools, and volume-backup
+        tools into three piles — Yard Dog is the first to hold all three, safely, over the stacks a self-hoster actually runs.</b></p>
+    </div>
+  </section>
+
+  <footer>
+    30 tools · 5 categories · compiled 2026-07-26 from official docs, GitHub repos &amp; issue trackers.
+    Verdicts scored against arbitrary-Compose-stack coverage, not the tool's own metadata.
+    Some maintenance dates &amp; UI behaviors flagged UNVERIFIED in source notes. · SA = source-available (not OSI-approved OSS).
+  </footer>
+</div>
