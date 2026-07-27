@@ -188,6 +188,53 @@ pub fn execute_plan(
     Ok(manifest)
 }
 
+/// Runs a `docker` invocation (argv are the arguments after `docker`).
+pub trait DockerRunner {
+    fn run(&self, argv: &[String]) -> std::io::Result<()>;
+}
+
+/// Build the `docker` argv that tars a named volume into `dest_dir` using a
+/// throwaway alpine container. Output file is `<volume>.tar.gz`.
+pub fn volume_archive_argv(volume: &str, dest_dir: &str) -> Vec<String> {
+    vec![
+        "run".into(),
+        "--rm".into(),
+        "-v".into(),
+        format!("{volume}:/src:ro"),
+        "-v".into(),
+        format!("{dest_dir}:/backup"),
+        "alpine".into(),
+        "tar".into(),
+        "czf".into(),
+        format!("/backup/{volume}.tar.gz"),
+        "-C".into(),
+        "/src".into(),
+        ".".into(),
+    ]
+}
+
+/// Archive a named volume by running the built argv through `runner`.
+pub fn archive_volume(volume: &str, dest_dir: &str, runner: &dyn DockerRunner) -> std::io::Result<()> {
+    runner.run(&volume_archive_argv(volume, dest_dir))
+}
+
+/// An [`Archiver`] that archives named volumes via Docker; bind/network targets
+/// are left to a filesystem archiver.
+pub struct DockerVolumeArchiver<'a> {
+    pub runner: &'a dyn DockerRunner,
+}
+impl Archiver for DockerVolumeArchiver<'_> {
+    fn archive(&self, target: &BackupTarget, dest_dir: &str) -> std::io::Result<()> {
+        match target.kind {
+            TargetKind::Volume => archive_volume(&target.name, dest_dir, self.runner),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "DockerVolumeArchiver handles Volume targets only",
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,5 +360,62 @@ mod tests {
         assert_eq!(plan.dumps[0].engine, DbEngine::Postgres);
         assert!(plan.copies.iter().any(|t| t.name == "pgdata"));
         assert!(plan.copies.iter().any(|t| t.name == "/srv/site"));
+    }
+
+    #[derive(Default)]
+    struct RecDocker {
+        runs: RefCell<Vec<Vec<String>>>,
+    }
+    impl DockerRunner for RecDocker {
+        fn run(&self, argv: &[String]) -> std::io::Result<()> {
+            self.runs.borrow_mut().push(argv.to_vec());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn volume_archive_argv_targets_the_volume_and_output() {
+        let argv = volume_archive_argv("pgdata", "/bak");
+        assert_eq!(argv[0], "run");
+        assert!(argv.contains(&"--rm".to_string()));
+        assert!(argv.contains(&"pgdata:/src:ro".to_string()));
+        assert!(argv.contains(&"/bak:/backup".to_string()));
+        assert!(argv.iter().any(|a| a == "/backup/pgdata.tar.gz"));
+    }
+
+    #[test]
+    fn archive_volume_runs_the_built_argv() {
+        let docker = RecDocker::default();
+        archive_volume("pgdata", "/bak", &docker).unwrap();
+        let runs = docker.runs.borrow();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0], volume_archive_argv("pgdata", "/bak"));
+    }
+
+    #[test]
+    fn docker_volume_archiver_handles_volumes_only() {
+        let docker = RecDocker::default();
+        let archiver = DockerVolumeArchiver { runner: &docker };
+        archiver
+            .archive(
+                &BackupTarget {
+                    name: "pgdata".into(),
+                    kind: TargetKind::Volume,
+                },
+                "/bak",
+            )
+            .unwrap();
+        assert_eq!(docker.runs.borrow().len(), 1);
+
+        let err = archiver
+            .archive(
+                &BackupTarget {
+                    name: "/srv/x".into(),
+                    kind: TargetKind::Bind,
+                },
+                "/bak",
+            )
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
     }
 }

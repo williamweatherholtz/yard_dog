@@ -381,12 +381,24 @@ impl yarddog::backup::Archiver for RealArchiver {
                 }
             }
             TargetKind::Volume => {
-                println!(
-                    "note: skipping named volume '{}' (volume archiving lands in a later increment)",
-                    target.name
-                );
-                Ok(())
+                yarddog::backup::archive_volume(&target.name, dest_dir, &RealDockerRunner)
             }
+        }
+    }
+}
+
+/// Real docker runner: invokes `docker <argv>`.
+struct RealDockerRunner;
+impl yarddog::backup::DockerRunner for RealDockerRunner {
+    fn run(&self, argv: &[String]) -> std::io::Result<()> {
+        let status = std::process::Command::new("docker").args(argv).status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "docker command failed",
+            ))
         }
     }
 }
