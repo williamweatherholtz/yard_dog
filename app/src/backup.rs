@@ -147,10 +147,114 @@ pub fn render_plan(plan: &BackupPlan) -> String {
     out
 }
 
+/// Runs a database's consistent dump inside its container.
+pub trait CommandRunner {
+    fn run_dump(&self, service: &str, command: &str, dest_dir: &str) -> std::io::Result<()>;
+}
+
+/// Copies a persistent-data target into the backup destination.
+pub trait Archiver {
+    fn archive(&self, target: &BackupTarget, dest_dir: &str) -> std::io::Result<()>;
+}
+
+/// What a backup run actually captured.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct BackupManifest {
+    pub dumped: Vec<String>,
+    pub copied: Vec<String>,
+}
+
+/// Execute a backup plan into `dest_dir` — but only when `confirmed`. Without
+/// confirmation it performs no writes and returns an empty manifest.
+pub fn execute_plan(
+    plan: &BackupPlan,
+    dest_dir: &str,
+    confirmed: bool,
+    runner: &dyn CommandRunner,
+    archiver: &dyn Archiver,
+) -> std::io::Result<BackupManifest> {
+    let mut manifest = BackupManifest::default();
+    if !confirmed {
+        return Ok(manifest);
+    }
+    for dump in &plan.dumps {
+        runner.run_dump(&dump.service, &dump.command, dest_dir)?;
+        manifest.dumped.push(dump.service.clone());
+    }
+    for target in &plan.copies {
+        archiver.archive(target, dest_dir)?;
+        manifest.copied.push(target.name.clone());
+    }
+    Ok(manifest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::classify::VolumeInfo;
+    use std::cell::RefCell;
+
+    #[derive(Default)]
+    struct RecRunner {
+        calls: RefCell<Vec<String>>,
+    }
+    impl CommandRunner for RecRunner {
+        fn run_dump(&self, service: &str, command: &str, _dest: &str) -> std::io::Result<()> {
+            self.calls.borrow_mut().push(format!("{service}:{command}"));
+            Ok(())
+        }
+    }
+    #[derive(Default)]
+    struct RecArch {
+        calls: RefCell<Vec<String>>,
+    }
+    impl Archiver for RecArch {
+        fn archive(&self, target: &BackupTarget, _dest: &str) -> std::io::Result<()> {
+            self.calls.borrow_mut().push(target.name.clone());
+            Ok(())
+        }
+    }
+
+    fn sample_plan() -> BackupPlan {
+        BackupPlan {
+            dumps: vec![DumpStep {
+                service: "db".into(),
+                engine: DbEngine::Postgres,
+                command: DbEngine::Postgres.dump_command().to_string(),
+            }],
+            copies: vec![
+                BackupTarget {
+                    name: "pgdata".into(),
+                    kind: TargetKind::Volume,
+                },
+                BackupTarget {
+                    name: "/srv/site".into(),
+                    kind: TargetKind::Bind,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn execute_runs_dumps_and_copies_when_confirmed() {
+        let r = RecRunner::default();
+        let a = RecArch::default();
+        let m = execute_plan(&sample_plan(), "/dest", true, &r, &a).unwrap();
+        assert_eq!(r.calls.borrow().len(), 1);
+        assert!(r.calls.borrow()[0].contains("pg_dump"));
+        assert_eq!(a.calls.borrow().as_slice(), ["pgdata", "/srv/site"]);
+        assert_eq!(m.dumped, vec!["db".to_string()]);
+        assert_eq!(m.copied, vec!["pgdata".to_string(), "/srv/site".to_string()]);
+    }
+
+    #[test]
+    fn execute_does_nothing_without_confirmation() {
+        let r = RecRunner::default();
+        let a = RecArch::default();
+        let m = execute_plan(&sample_plan(), "/dest", false, &r, &a).unwrap();
+        assert!(r.calls.borrow().is_empty() && a.calls.borrow().is_empty());
+        assert_eq!(m, BackupManifest::default());
+    }
 
     fn env() -> HashMap<String, String> {
         HashMap::new()

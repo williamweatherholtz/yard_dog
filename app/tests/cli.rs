@@ -107,3 +107,43 @@ fn backup_plan_lists_dumps_and_targets() {
     assert!(out.contains("pgdata"), "plan should list the named volume; got:\n{out}");
     assert!(out.contains("/srv/site"), "plan should list the bind; got:\n{out}");
 }
+
+#[test]
+fn backup_run_copies_bind_data() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("data")).unwrap();
+    std::fs::write(dir.path().join("data").join("file.txt"), b"hello").unwrap();
+    let compose = dir.path().join("docker-compose.yml");
+    std::fs::write(
+        &compose,
+        "services:\n  app:\n    image: nginx\n    volumes:\n      - ./data:/usr/share/nginx/html\n",
+    )
+    .unwrap();
+
+    // plan only: nothing copied
+    Command::cargo_bin("yd")
+        .unwrap()
+        .current_dir(dir.path())
+        .arg("backup")
+        .arg(compose.to_str().unwrap())
+        .arg("--plan")
+        .assert()
+        .success();
+    assert!(!dir.path().join("bak").join("data").join("file.txt").exists());
+
+    // run: the bind's data is copied into the destination
+    Command::cargo_bin("yd")
+        .unwrap()
+        .current_dir(dir.path())
+        .arg("backup")
+        .arg(compose.to_str().unwrap())
+        .arg("--run")
+        .arg("--dest")
+        .arg("bak")
+        .assert()
+        .success();
+    assert!(
+        dir.path().join("bak").join("data").join("file.txt").exists(),
+        "a confirmed backup run must copy the bind's data into the destination"
+    );
+}

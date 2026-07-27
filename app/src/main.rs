@@ -30,13 +30,19 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
-    /// Plan an application-consistent backup for a stack.
+    /// Plan or run an application-consistent backup for a stack.
     Backup {
         /// Path to the docker-compose file.
         file: String,
         /// Preview the plan (no backup runs).
         #[arg(long)]
         plan: bool,
+        /// Execute the backup (requires --dest).
+        #[arg(long)]
+        run: bool,
+        /// Destination directory for the backup.
+        #[arg(long)]
+        dest: Option<String>,
     },
 }
 
@@ -45,7 +51,12 @@ fn main() {
     let result = match cli.command {
         Command::Inspect { file } => run_inspect(&file),
         Command::Fix { file, yes } => run_fix(&file, yes),
-        Command::Backup { file, plan } => run_backup(&file, plan),
+        Command::Backup {
+            file,
+            plan,
+            run,
+            dest,
+        } => run_backup(&file, plan, run, dest.as_deref()),
     };
     if let Err(e) = result {
         eprintln!("yd: {e}");
@@ -109,16 +120,96 @@ fn run_fix(file: &str, yes: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn run_backup(file: &str, plan: bool) -> Result<(), String> {
+fn run_backup(file: &str, plan: bool, run: bool, dest: Option<&str>) -> Result<(), String> {
     let yaml = std::fs::read_to_string(file).map_err(|e| format!("reading {file}: {e}"))?;
     let env: HashMap<String, String> = std::env::vars().collect();
     let volumes = RealVolumeInspector::new();
     let net = RealNetworkProbe;
     let backup_plan = yarddog::backup::build_backup_plan(&yaml, &env, &volumes, &net);
-    if plan {
+
+    if run {
+        let dest = dest.ok_or_else(|| "`--run` requires `--dest DIR`".to_string())?;
+        std::fs::create_dir_all(dest).map_err(|e| format!("creating {dest}: {e}"))?;
+        let manifest =
+            yarddog::backup::execute_plan(&backup_plan, dest, true, &RealRunner, &RealArchiver)
+                .map_err(|e| format!("backup failed: {e}"))?;
+        println!(
+            "backed up to {dest}: dumps={:?} copies={:?}",
+            manifest.dumped, manifest.copied
+        );
+    } else if plan {
         print!("{}", yarddog::backup::render_plan(&backup_plan));
     } else {
-        println!("Backup execution is not implemented yet — re-run with --plan to preview.");
+        println!("Nothing to do — pass --plan to preview or --run --dest DIR to execute.");
+    }
+    Ok(())
+}
+
+/// Real dump runner: streams a container's dump command output to a file.
+struct RealRunner;
+impl yarddog::backup::CommandRunner for RealRunner {
+    fn run_dump(&self, service: &str, command: &str, dest_dir: &str) -> std::io::Result<()> {
+        let out_path = std::path::Path::new(dest_dir).join(format!("{service}.dump"));
+        let out = std::fs::File::create(&out_path)?;
+        let status = std::process::Command::new("docker")
+            .args(["compose", "exec", "-T", service, "sh", "-c", command])
+            .stdout(out)
+            .status()?;
+        if !status.success() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("dump for service '{service}' failed"),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Real archiver: copies bind/network host paths into the destination. Named
+/// volume archiving (needs Docker) lands in a later increment.
+struct RealArchiver;
+impl yarddog::backup::Archiver for RealArchiver {
+    fn archive(&self, target: &yarddog::backup::BackupTarget, dest_dir: &str) -> std::io::Result<()> {
+        use yarddog::backup::TargetKind;
+        match target.kind {
+            TargetKind::Bind | TargetKind::Network => {
+                let src = std::path::Path::new(&target.name);
+                let base = src
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "root".to_string());
+                let dst = std::path::Path::new(dest_dir).join(base);
+                if src.is_file() {
+                    if let Some(parent) = dst.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::copy(src, &dst)?;
+                    Ok(())
+                } else {
+                    copy_dir_all(src, &dst)
+                }
+            }
+            TargetKind::Volume => {
+                println!(
+                    "note: skipping named volume '{}' (volume archiving lands in a later increment)",
+                    target.name
+                );
+                Ok(())
+            }
+        }
+    }
+}
+
+fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&entry.path(), &to)?;
+        } else {
+            std::fs::copy(entry.path(), to)?;
+        }
     }
     Ok(())
 }
