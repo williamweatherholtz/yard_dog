@@ -13,6 +13,7 @@ pub mod mounttable;
 pub mod ownership;
 pub mod remediation;
 pub mod report;
+pub mod retention;
 
 /// Crate version, surfaced by the CLI.
 pub fn version() -> &'static str {

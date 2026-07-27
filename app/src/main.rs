@@ -44,6 +44,15 @@ enum Command {
         #[arg(long)]
         dest: Option<String>,
     },
+    /// Prune old backup snapshots in a destination, keeping the newest N.
+    Prune {
+        /// Backup destination directory (snapshots are subdirectories).
+        #[arg(long)]
+        dest: String,
+        /// Number of most-recent snapshots to keep.
+        #[arg(long)]
+        keep: usize,
+    },
 }
 
 fn main() {
@@ -57,6 +66,7 @@ fn main() {
             run,
             dest,
         } => run_backup(&file, plan, run, dest.as_deref()),
+        Command::Prune { dest, keep } => run_prune(&dest, keep),
     };
     if let Err(e) = result {
         eprintln!("yd: {e}");
@@ -142,6 +152,16 @@ fn run_backup(file: &str, plan: bool, run: bool, dest: Option<&str>) -> Result<(
     } else {
         println!("Nothing to do — pass --plan to preview or --run --dest DIR to execute.");
     }
+    Ok(())
+}
+
+fn run_prune(dest: &str, keep: usize) -> Result<(), String> {
+    let store = yarddog::retention::LocalStore {
+        dir: std::path::PathBuf::from(dest),
+    };
+    let removed = yarddog::retention::apply_retention(&store, keep)
+        .map_err(|e| format!("prune failed: {e}"))?;
+    println!("pruned {} snapshot(s): {:?}", removed.len(), removed);
     Ok(())
 }
 

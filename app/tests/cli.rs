@@ -147,3 +147,25 @@ fn backup_run_copies_bind_data() {
         "a confirmed backup run must copy the bind's data into the destination"
     );
 }
+
+#[test]
+fn prune_keeps_newest_snapshots() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["2026-01", "2026-02", "2026-03"] {
+        std::fs::create_dir(dir.path().join(name)).unwrap();
+    }
+
+    Command::cargo_bin("yd")
+        .unwrap()
+        .arg("prune")
+        .arg("--dest")
+        .arg(dir.path().to_str().unwrap())
+        .arg("--keep")
+        .arg("2")
+        .assert()
+        .success();
+
+    assert!(!dir.path().join("2026-01").exists(), "oldest must be pruned");
+    assert!(dir.path().join("2026-02").exists());
+    assert!(dir.path().join("2026-03").exists());
+}
