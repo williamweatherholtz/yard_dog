@@ -9,7 +9,8 @@
 //!   * every path parameter is confined under the served root (no absolute
 //!     paths, no `..`), so the API can never read or write outside it.
 
-use crate::{guardrails, lifecycle, preflight, stacks, workload};
+use crate::drift::{self, DriftKind};
+use crate::{compose, guardrails, lifecycle, preflight, registry, stacks, updates, workload};
 use std::io;
 use std::path::{Path, PathBuf};
 use tiny_http::{Header, Method, Response, Server};
@@ -286,8 +287,14 @@ pub fn serve(port: u16, root: &Path) -> io::Result<()> {
                     None => json_response(404, "{\"error\":\"not found or outside root\"}".into()),
                 }
             }
-            (Method::Get, "/api/drift") => docker_read(&root, &query, "drift"),
-            (Method::Get, "/api/updates") => docker_read(&root, &query, "updates"),
+            (Method::Get, "/api/drift") => match query_param(&query, "compose").and_then(|r| drift_json(&root, &r)) {
+                Some(b) => json_response(200, b),
+                None => json_response(400, "{\"error\":\"compose required or outside root\"}".into()),
+            },
+            (Method::Get, "/api/updates") => match query_param(&query, "compose").and_then(|r| updates_json(&root, &r)) {
+                Some(b) => json_response(200, b),
+                None => json_response(400, "{\"error\":\"compose required or outside root\"}".into()),
+            },
             (Method::Post, p) if p.starts_with("/api/") => {
                 // Anti-CSRF: require an application/json body and a loopback (or
                 // absent) Origin, so a visited page cannot drive actions here.
@@ -352,15 +359,59 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
-/// Shell out to `yd drift|updates` for a compose (docker-dependent read).
-fn docker_read(root: &Path, query: &str, sub: &str) -> Response<io::Cursor<Vec<u8>>> {
-    let Some(rel) = query_param(query, "compose") else {
-        return json_response(400, "{\"error\":\"compose required\"}".into());
-    };
-    let Some(abs) = safe_join(root, &rel) else {
-        return json_response(400, "{\"error\":\"path outside root\"}".into());
-    };
-    json_response(200, run_tool(&yd_bin(), &[sub.to_string(), abs.to_string_lossy().to_string()]))
+/// `GET /api/drift?compose=REL` — structured declared-vs-running drift.
+fn drift_json(root: &Path, rel: &str) -> Option<String> {
+    let compose = safe_join(root, rel)?;
+    let yaml = std::fs::read_to_string(&compose).ok()?;
+    let declared = compose::parse_service_images(&yaml);
+    match drift::running_images_via_docker(&compose) {
+        None => Some("{\"available\":false,\"items\":[]}".into()),
+        Some(running) => {
+            let items: Vec<String> = drift::detect_drift(&declared, &running)
+                .iter()
+                .map(|i| {
+                    let (kind, extra) = match &i.kind {
+                        DriftKind::Missing => ("missing", String::new()),
+                        DriftKind::Unexpected => ("unexpected", String::new()),
+                        DriftKind::ImageChanged { declared, running } => (
+                            "changed",
+                            format!(",\"declared\":{},\"running\":{}", json_escape(declared), json_escape(running)),
+                        ),
+                    };
+                    format!("{{\"service\":{},\"kind\":\"{}\"{}}}", json_escape(&i.service), kind, extra)
+                })
+                .collect();
+            Some(format!("{{\"available\":true,\"items\":[{}]}}", items.join(",")))
+        }
+    }
+}
+
+/// `GET /api/updates?compose=REL` — structured per-service update status.
+fn updates_json(root: &Path, rel: &str) -> Option<String> {
+    let compose = safe_join(root, rel)?;
+    let yaml = std::fs::read_to_string(&compose).ok()?;
+    let services = workload::parse_services(&yaml);
+    let mut running = std::collections::HashMap::new();
+    for s in &services {
+        if let Some(img) = &s.image {
+            if let Some(d) = updates::local_image_digest(img) {
+                running.insert(s.name.clone(), d);
+            }
+        }
+    }
+    let plan = updates::build_update_plan(&services, &running, &registry::HttpRegistryClient);
+    let items: Vec<String> = plan
+        .iter()
+        .map(|it| {
+            format!(
+                "{{\"service\":{},\"status\":{},\"action\":{}}}",
+                json_escape(&it.service),
+                json_escape(&format!("{:?}", it.status)),
+                json_escape(it.action.as_str())
+            )
+        })
+        .collect();
+    Some(format!("{{\"items\":[{}]}}", items.join(",")))
 }
 
 #[cfg(test)]

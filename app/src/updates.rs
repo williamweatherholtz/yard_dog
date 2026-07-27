@@ -41,6 +41,20 @@ pub trait RegistryClient {
     fn remote_digest(&self, image: &str) -> Option<String>;
 }
 
+/// The locally-pulled digest of an image (from `docker image inspect`), e.g.
+/// "sha256:...". None when the image is not present locally.
+pub fn local_image_digest(image: &str) -> Option<String> {
+    let out = std::process::Command::new("docker")
+        .args(["image", "inspect", image, "--format", "{{index .RepoDigests 0}}"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let repo_digest = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    repo_digest.split_once('@').map(|(_, d)| d.to_string())
+}
+
 /// Compare the running digest to the remote digest.
 pub fn update_status(running: Option<&str>, remote: Option<&str>) -> UpdateStatus {
     match (running, remote) {

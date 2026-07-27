@@ -303,28 +303,13 @@ fn run_inspect(file: &str) -> Result<(), String> {
 }
 
 
-/// The locally-pulled digest of an image (from `docker image inspect`), e.g.
-/// "sha256:...". None when the image isn't present locally.
-fn local_image_digest(image: &str) -> Option<String> {
-    let out = std::process::Command::new("docker")
-        .args(["image", "inspect", image, "--format", "{{index .RepoDigests 0}}"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let repo_digest = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    // "repo@sha256:..." -> "sha256:..."
-    repo_digest.split_once('@').map(|(_, d)| d.to_string())
-}
-
 fn run_updates(file: &str) -> Result<(), String> {
     let yaml = std::fs::read_to_string(file).map_err(|e| format!("reading {file}: {e}"))?;
     let services = yarddog::workload::parse_services(&yaml);
     let mut running = std::collections::HashMap::new();
     for s in &services {
         if let Some(img) = &s.image {
-            if let Some(d) = local_image_digest(img) {
+            if let Some(d) = yarddog::updates::local_image_digest(img) {
                 running.insert(s.name.clone(), d);
             }
         }
@@ -343,23 +328,13 @@ fn run_updates(file: &str) -> Result<(), String> {
 }
 
 fn run_drift(file: &str) -> Result<(), String> {
-    // Real running-state: `docker compose -f <compose> ps --format json`.
-    // None only when docker is unreachable; an empty map means nothing running.
+    // Real running-state via `docker compose ps`; None only when docker is down.
     struct DockerRunning {
         compose: std::path::PathBuf,
     }
     impl yarddog::drift::RunningState for DockerRunning {
         fn running_images(&self) -> Option<std::collections::HashMap<String, String>> {
-            let out = std::process::Command::new("docker")
-                .args(["compose", "-f"])
-                .arg(&self.compose)
-                .args(["ps", "--format", "json"])
-                .output()
-                .ok()?;
-            if !out.status.success() {
-                return None;
-            }
-            Some(yarddog::drift::parse_compose_ps(&String::from_utf8_lossy(&out.stdout)))
+            yarddog::drift::running_images_via_docker(&self.compose)
         }
     }
     let running = DockerRunning { compose: std::path::PathBuf::from(file) };

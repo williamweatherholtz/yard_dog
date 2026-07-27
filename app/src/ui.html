@@ -107,6 +107,12 @@
     background: color-mix(in srgb, var(--info) 14%, transparent); color: var(--info); }
   .kind.datastore { background: color-mix(in srgb, var(--bad) 13%, transparent); color: var(--bad); }
   .kind.proxy { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent-ink); }
+  .stchip { font: 600 11px/1 system-ui; padding: 4px 8px; border-radius: 999px; display: inline-flex; align-items: center; gap: 5px; margin-right: 6px; }
+  .stchip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .stchip.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 13%, transparent); }
+  .stchip.attn { color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
+  .stchip.bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 13%, transparent); }
+  .stchip.dim { color: var(--muted); background: var(--panel-2); }
 
   .finding { display: flex; gap: 10px; align-items: baseline; padding: 8px 10px; border-radius: 8px; margin-bottom: 6px; border: 1px solid var(--line); }
   .finding .sev { font: 600 11px/1 var(--mono); text-transform: uppercase; padding: 3px 6px; border-radius: 5px; flex: none; }
@@ -222,8 +228,7 @@ function renderDetail(d) {
   const bar = el("div", "actionbar");
   const act = (label, cls, fn) => { const b = el("button", cls, label); b.onclick = fn; bar.append(b); return b; };
   act("Deploy", "primary", () => confirmAction("Deploy this stack? Yard Dog will back up, snapshot, and health-gate the change.", "/api/deploy", { compose: d.compose }, "deploy"));
-  act("Drift", "", () => runRead("/api/drift?compose=" + encodeURIComponent(d.compose), "drift"));
-  act("Updates", "", () => runRead("/api/updates?compose=" + encodeURIComponent(d.compose), "updates"));
+  act("↻ Status", "", () => refreshStatus(d.compose));
   act("Back up", "", () => confirmAction("Run an application-consistent backup of this stack?", "/api/backup", { compose: d.compose }, "backup"));
   // lifecycle transitions relevant to the current state
   const transitions = { draft: ["activate", "archive"], active: ["deprecate", "archive"], deprecated: ["activate", "archive"], archived: ["restore"] };
@@ -238,13 +243,14 @@ function renderDetail(d) {
   svcSec.append(el("h3", null, "Services"));
   const table = el("table");
   const thead = el("tr");
-  ["Service", "Image", "Kind", ""].forEach(h => thead.append(el("th", null, h)));
+  ["Service", "Image", "Kind", "Status", ""].forEach(h => thead.append(el("th", null, h)));
   table.append(thead);
   for (const s of d.services) {
     const tr = el("tr");
     tr.append(el("td", null, s.name));
     tr.append(el("td", "img", s.image || "—"));
     tr.append((() => { const td = el("td"); td.append(el("span", "kind " + s.kind, s.kind)); return td; })());
+    const st = el("td", "status"); st.dataset.svc = s.name; st.append(el("span", "line-dim", "—")); tr.append(st);
     const up = el("td");
     const b = el("button", "", "Upgrade…");
     b.onclick = () => {
@@ -279,6 +285,9 @@ function renderDetail(d) {
   const pre = el("pre"); pre.id = "console"; pre.append(el("span", "line-dim", "Actions and checks print here."));
   cSec.append(pre);
   main.append(cSec);
+
+  // auto-load drift + update chips (docker/network — non-blocking)
+  refreshStatus(d.compose);
 }
 
 function logLine(cls, text) {
@@ -304,12 +313,31 @@ async function doAction(path, body, label) {
     loadStacks();
   } catch (e) { busy.remove(); logLine("line-bad", "✗ " + e); }
 }
-async function runRead(path, label) {
-  logLine("line-cmd", "▶ yd " + label);
-  const { data } = await api(path);
-  if (data.error) { logLine("line-bad", "✗ " + data.error); return; }
-  if (data.stdout && data.stdout.trim()) logLine("", data.stdout.trimEnd());
-  else logLine("line-dim", "(no output)");
+function chip(cls, text, title) { const s = el("span", "stchip " + cls, text); if (title) s.title = title; return s; }
+async function refreshStatus(compose) {
+  document.querySelectorAll("td.status").forEach(td => { td.innerHTML = ""; const s = el("span"); s.innerHTML = '<span class="spin"></span>'; td.append(s); });
+  const [drift, updates] = await Promise.all([
+    api("/api/drift?compose=" + encodeURIComponent(compose)).then(r => r.data).catch(() => ({})),
+    api("/api/updates?compose=" + encodeURIComponent(compose)).then(r => r.data).catch(() => ({})),
+  ]);
+  const driftBy = {}; (drift.items || []).forEach(i => driftBy[i.service] = i);
+  const updBy = {}; (updates.items || []).forEach(i => updBy[i.service] = i);
+  document.querySelectorAll("td.status").forEach(td => {
+    const svc = td.dataset.svc; td.innerHTML = "";
+    if (drift.available === false) td.append(chip("dim", "drift ?", "running-state unavailable (docker down?)"));
+    else {
+      const di = driftBy[svc];
+      if (!di) td.append(chip("ok", "in sync"));
+      else if (di.kind === "changed") td.append(chip("attn", "drift", (di.declared || "") + " → " + (di.running || "")));
+      else if (di.kind === "missing") td.append(chip("bad", "not running"));
+      else td.append(chip("attn", di.kind));
+    }
+    const ui = updBy[svc];
+    if (!ui || ui.status === "Unknown") td.append(chip("dim", "update ?"));
+    else if (ui.status === "UpToDate") td.append(chip("ok", "up-to-date"));
+    else if (ui.status === "UpdateAvailable") td.append(chip("attn", "update", "action: " + ui.action));
+    else td.append(chip("dim", ui.status));
+  });
 }
 
 loadStacks();

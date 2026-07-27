@@ -5,6 +5,22 @@
 
 use crate::compose::parse_service_images;
 use std::collections::HashMap;
+use std::path::Path;
+
+/// The running service->image map for a compose, via `docker compose ps`. `None`
+/// when the daemon is unreachable; an empty map means nothing is running.
+pub fn running_images_via_docker(compose: &Path) -> Option<HashMap<String, String>> {
+    let out = std::process::Command::new("docker")
+        .args(["compose", "-f"])
+        .arg(compose)
+        .args(["ps", "--format", "json"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(parse_compose_ps(&String::from_utf8_lossy(&out.stdout)))
+}
 
 /// Parse `docker compose ps --format json` output (newline-delimited JSON
 /// objects, or a JSON array) into a running service->image map. Pure over the
