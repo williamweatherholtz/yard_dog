@@ -390,3 +390,10 @@ fn pin_add_then_list() {
     let out = String::from_utf8_lossy(&a.get_output().stdout).to_string();
     assert!(out.contains("immich"), "got:\n{out}");
 }
+
+#[test]
+fn self_update_prints_current_version() {
+    let a = Command::cargo_bin("yd").unwrap().arg("self-update").assert().success();
+    let out = String::from_utf8_lossy(&a.get_output().stdout).to_string();
+    assert!(out.contains("0.1.0"), "got:\n{out}");
+}

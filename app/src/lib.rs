@@ -18,6 +18,7 @@ pub mod ownership;
 pub mod remediation;
 pub mod report;
 pub mod retention;
+pub mod selfupdate;
 pub mod stacks;
 pub mod transport;
 pub mod updates;

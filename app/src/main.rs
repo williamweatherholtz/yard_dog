@@ -124,6 +124,8 @@ enum Command {
         #[command(subcommand)]
         action: PinAction,
     },
+    /// Check whether a newer Yard Dog release is available.
+    SelfUpdate,
 }
 
 #[derive(Subcommand)]
@@ -193,6 +195,7 @@ fn main() {
         Command::Prune { dest, keep } => run_prune(&dest, keep),
         Command::Version { action } => run_version(action),
         Command::Pin { action } => run_pin(action),
+        Command::SelfUpdate => run_self_update(),
     };
     if let Err(e) = result {
         eprintln!("yd: {e}");
@@ -473,6 +476,21 @@ fn run_push(from: &str, to: &str) -> Result<(), String> {
     )
     .map_err(|e| format!("push failed: {e}"))?;
     println!("pushed {n} file(s) to {to}");
+    Ok(())
+}
+
+fn run_self_update() -> Result<(), String> {
+    // Placeholder release source: GitHub-release fetch + verified atomic replace
+    // land in a later increment. For now this reports detection only.
+    struct NoReleaseInfo;
+    impl yarddog::selfupdate::ReleaseSource for NoReleaseInfo {
+        fn latest_version(&self) -> Option<String> {
+            None
+        }
+    }
+    let current = env!("CARGO_PKG_VERSION");
+    let status = yarddog::selfupdate::check(current, &NoReleaseInfo);
+    println!("yd {current}: {status:?}");
     Ok(())
 }
 
