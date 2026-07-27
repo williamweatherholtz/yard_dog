@@ -20,6 +20,7 @@ pub mod report;
 pub mod retention;
 pub mod stacks;
 pub mod transport;
+pub mod workload;
 pub mod verify;
 
 /// Crate version, surfaced by the CLI.

@@ -27,6 +27,11 @@ enum Command {
         /// Path to the docker-compose file.
         file: String,
     },
+    /// Classify each service into a workload kind.
+    Classify {
+        /// Path to the docker-compose file.
+        file: String,
+    },
     /// Apply remediations for detected path issues (dry-run unless --yes).
     Fix {
         /// Path to the docker-compose file.
@@ -144,6 +149,7 @@ fn main() {
     let result = match cli.command {
         Command::Inspect { file } => run_inspect(&file),
         Command::Check { file } => run_check(&file),
+        Command::Classify { file } => run_classify(&file),
         Command::Fix { file, yes } => run_fix(&file, yes),
         Command::Backup {
             file,
@@ -191,6 +197,23 @@ fn analyze(file: &str) -> Result<Analysis, String> {
 fn run_inspect(file: &str) -> Result<(), String> {
     let (reports, _ids) = analyze(file)?;
     print!("{}", render_text(&reports));
+    Ok(())
+}
+
+fn run_classify(file: &str) -> Result<(), String> {
+    let yaml = std::fs::read_to_string(file).map_err(|e| format!("reading {file}: {e}"))?;
+    for v in yarddog::workload::parse_services(&yaml) {
+        let kind = yarddog::workload::classify(&v);
+        print!("{}: {}", v.name, kind.as_str());
+        if let Some((authored, heuristic)) = yarddog::workload::disagreement(&v) {
+            print!(
+                "  (label says {}, heuristic says {})",
+                authored.as_str(),
+                heuristic.as_str()
+            );
+        }
+        println!();
+    }
     Ok(())
 }
 
