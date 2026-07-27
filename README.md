@@ -102,6 +102,24 @@ Run `yd <command> --help` for full flags. Grouped by what they touch:
 
 ---
 
+## Install
+
+**Linux / macOS** — downloads the right binary for your OS/arch and verifies its SHA256:
+```sh
+curl -fsSL https://raw.githubusercontent.com/williamweatherholtz/yard_dog/main/install.sh | sh
+```
+**Windows** (PowerShell):
+```powershell
+irm https://raw.githubusercontent.com/williamweatherholtz/yard_dog/main/install.ps1 | iex
+```
+Prebuilt binaries (x86_64 + arm64 Linux, x86_64 + arm64 macOS, x86_64 Windows) and
+`SHA256SUMS` are attached to each [GitHub Release](https://github.com/williamweatherholtz/yard_dog/releases).
+Once installed, `yd self-update --apply` keeps it current (also SHA256-verified).
+
+Yard Dog installs as a **host binary** by design — it manages the host's Docker, so
+running it inside a container would require mounting the Docker socket (which its own
+guardrails flag as host-root-equivalent).
+
 ## Browser control plane
 
 `yd serve` starts a **loopback-only** browser UI (a thin wrapper over the same
