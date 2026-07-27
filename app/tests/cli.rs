@@ -329,3 +329,23 @@ fn version_snapshot_then_history() {
     let out = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
     assert!(out.contains("first-snapshot"), "history should list the snapshot; got:\n{out}");
 }
+
+#[test]
+fn check_blocks_bad_compose_passes_clean() {
+    let dir = tempfile::tempdir().unwrap();
+    let bad = dir.path().join("bad.yml");
+    std::fs::write(
+        &bad,
+        "services:\n  db:\n    image: postgres:latest\n    environment:\n      POSTGRES_PASSWORD: hunter2\n",
+    )
+    .unwrap();
+    Command::cargo_bin("yd").unwrap().arg("check").arg(bad.to_str().unwrap()).assert().failure();
+
+    let good = dir.path().join("good.yml");
+    std::fs::write(
+        &good,
+        "services:\n  web:\n    image: nginx:1.27\n    restart: unless-stopped\n    mem_limit: 128m\n    healthcheck:\n      test: [\"CMD\", \"true\"]\n",
+    )
+    .unwrap();
+    Command::cargo_bin("yd").unwrap().arg("check").arg(good.to_str().unwrap()).assert().success();
+}

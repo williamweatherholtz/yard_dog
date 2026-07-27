@@ -22,6 +22,11 @@ enum Command {
         /// Path to the docker-compose file.
         file: String,
     },
+    /// Run preventative policy guardrails over a compose file.
+    Check {
+        /// Path to the docker-compose file.
+        file: String,
+    },
     /// Apply remediations for detected path issues (dry-run unless --yes).
     Fix {
         /// Path to the docker-compose file.
@@ -138,6 +143,7 @@ fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Inspect { file } => run_inspect(&file),
+        Command::Check { file } => run_check(&file),
         Command::Fix { file, yes } => run_fix(&file, yes),
         Command::Backup {
             file,
@@ -185,6 +191,22 @@ fn analyze(file: &str) -> Result<Analysis, String> {
 fn run_inspect(file: &str) -> Result<(), String> {
     let (reports, _ids) = analyze(file)?;
     print!("{}", render_text(&reports));
+    Ok(())
+}
+
+fn run_check(file: &str) -> Result<(), String> {
+    let yaml = std::fs::read_to_string(file).map_err(|e| format!("reading {file}: {e}"))?;
+    let findings = yarddog::guardrails::run_guardrails(&yaml);
+    if findings.is_empty() {
+        println!("guardrails: OK (no findings)");
+    }
+    for f in &findings {
+        println!("  [{:?}] {} ({}): {}", f.severity, f.rule, f.service, f.message);
+    }
+    if !yarddog::guardrails::verdict(&findings) {
+        eprintln!("guardrails: BLOCKED by the findings above");
+        std::process::exit(2);
+    }
     Ok(())
 }
 

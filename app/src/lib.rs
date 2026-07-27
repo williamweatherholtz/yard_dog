@@ -10,6 +10,7 @@ pub mod classify;
 pub mod compose;
 pub mod deploy;
 pub mod gitver;
+pub mod guardrails;
 pub mod hostfs;
 pub mod mounttable;
 pub mod notify;
