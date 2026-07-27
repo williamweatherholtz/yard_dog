@@ -197,6 +197,22 @@ fn e2e_uc_drift_detection() {
         .stdout(predicates::str::contains("ImageChanged"));
 }
 
+// ---- ucUpdateCheck ------------------------------------------------------------
+#[test]
+#[ignore = "requires Docker + network"]
+fn e2e_uc_update_check() {
+    require_docker!("update_check");
+    let s = Stack::new("updates", |n| nginx_body(n, "nginx:1.27-alpine", 80));
+    // deploy pulls the image locally
+    yd().args(["deploy", &s.compose_str(), "--yes"]).assert().success();
+    // a freshly-pulled image reports UpToDate (local digest == current registry digest)
+    yd().args(["updates", &s.compose_str()])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("web:"))
+        .stdout(predicates::str::contains("UpToDate"));
+}
+
 // ---- ucBackupVerifiedRestore (no Docker needed) -------------------------------
 #[test]
 #[ignore = "part of the e2e suite"]

@@ -21,6 +21,7 @@ bollard = "0.17"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 sha2 = "0.10"
 serde_json = "1"
+ureq = { version = "2", features = ["tls"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -87,6 +87,16 @@ package YardDogPersonas {
         :>> extensions = "A *_FILE secret reference (Docker-secrets convention) is NOT flagged; an upgrade that would introduce a floating tag is blocked on the post-change compose.";
     }
 
+    use case ucUpdateCheck : UseCase {
+        :>> id = "6ee4e5d1-8a7c-4a81-8a6d-afb786550e45";
+        :>> title = "See which images have an update available";
+        :>> createdAt = "2026-07-27";
+        :>> createdBy = "wweatherholtz";
+        :>> description = "Sam/Alex want to know which service images have a newer digest upstream, with datastores held to notify-only.";
+        :>> mainSuccess = "`yd updates <compose>` resolves each declared image's current digest from its registry (Docker Hub or GHCR, anonymous) and compares it to the locally-pulled digest: a freshly-pulled image reports UpToDate; a service whose tag has moved upstream reports UpdateAvailable, with the kind-gated action (datastores => notify-only).";
+        :>> extensions = "A digest-pinned image has nothing to check; an image not present locally reports Unknown; when the registry is unreachable the status is Unknown rather than a wrong answer.";
+    }
+
     use case ucDriftDetection : UseCase {
         :>> id = "d703fb7a-66ed-4a80-bec8-68f16bc2c804";
         :>> title = "See drift between the declared compose and the running stack";

@@ -60,7 +60,7 @@ Run `yd <command> --help` for full flags. Grouped by what they touch:
 | `yd check <compose>` | Run the preventative policy guardrails over a compose file. |
 | `yd doctor <compose>` | One preflight verdict (READY / NOT READY) from guardrails + lifecycle, with a matching exit code. |
 | `yd classify <compose>` | Classify each service into a workload kind (datastore / web / worker / cron / proxy). |
-| `yd updates <compose>` | Show image-update status plus the kind-gated action per service. |
+| `yd updates <compose>` | Show image-update status (real digest check against Docker Hub / GHCR) plus the kind-gated action per service. |
 | `yd drift <compose>` | Report drift between the declared compose and the running stack. |
 | `yd stacks --root <dir>` | List the compose stacks discovered under a root directory. |
 

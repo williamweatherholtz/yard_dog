@@ -290,21 +290,34 @@ fn run_inspect(file: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Registry client placeholder: real remote-digest lookup + running-digest
-/// resolution (and private-registry auth) land in the next increment. Until
-/// then update status is reported as unknown.
-struct PendingRegistry;
-impl yarddog::updates::RegistryClient for PendingRegistry {
-    fn remote_digest(&self, _image: &str) -> Option<String> {
-        None
+
+/// The locally-pulled digest of an image (from `docker image inspect`), e.g.
+/// "sha256:...". None when the image isn't present locally.
+fn local_image_digest(image: &str) -> Option<String> {
+    let out = std::process::Command::new("docker")
+        .args(["image", "inspect", image, "--format", "{{index .RepoDigests 0}}"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
     }
+    let repo_digest = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // "repo@sha256:..." -> "sha256:..."
+    repo_digest.split_once('@').map(|(_, d)| d.to_string())
 }
 
 fn run_updates(file: &str) -> Result<(), String> {
     let yaml = std::fs::read_to_string(file).map_err(|e| format!("reading {file}: {e}"))?;
     let services = yarddog::workload::parse_services(&yaml);
-    let running = std::collections::HashMap::new();
-    let plan = yarddog::updates::build_update_plan(&services, &running, &PendingRegistry);
+    let mut running = std::collections::HashMap::new();
+    for s in &services {
+        if let Some(img) = &s.image {
+            if let Some(d) = local_image_digest(img) {
+                running.insert(s.name.clone(), d);
+            }
+        }
+    }
+    let plan = yarddog::updates::build_update_plan(&services, &running, &yarddog::registry::HttpRegistryClient);
     for item in &plan {
         println!(
             "{}: kind={} status={:?} action={}",

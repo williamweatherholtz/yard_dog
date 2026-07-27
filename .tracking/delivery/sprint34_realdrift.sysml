@@ -26,7 +26,7 @@ package Sprint34RealDrift {
     verification parseComposePsDoD : Test { :>> id = "c36210aa-10fb-4eae-ad3b-c31f252e99a9"; :>> method = VerificationMethod::test; :>> procedureText = "drift::parse_compose_ps parses `docker compose ps --format json` (newline-delimited objects and a JSON array) into a running service->image map, and returns an empty map for empty output; unit-tested against the real output shape (Service + Image fields)."; }
     part parseComposePsDoDR1 : TestResult { :>> id = "3147a1c7-8d44-4006-95cb-cc23f2c938e8"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "32aab9e"; :>> judgedAt = "2026-07-27"; :>> judgedBy = "ai"; }
 
-    action realDriftDemo;
+    action driftDemo;
     verification driftDemoDoD : Test { :>> id = "495b9ddf-9d8a-4b06-a442-9a524fc46423"; :>> method = VerificationMethod::demo; :>> procedureText = "Against real Docker (e2e_docker::e2e_uc_drift_detection + manual): after deploy `yd drift` reports 'no drift'; editing the declared image without redeploying reports ImageChanged (declared vs running); a stopped service reports Missing. run_drift shells out to `docker compose ps --format json` and returns None only when docker is unreachable."; }
     part driftDemoDoDR1 : TestResult { :>> id = "50d402fc-d8c3-4bc2-9167-501811b94942"; :>> outcome = VerdictKind::pass; :>> judgedAgainst = "32aab9e"; :>> judgedAt = "2026-07-27"; :>> judgedBy = "ai"; }
 
