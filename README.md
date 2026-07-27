@@ -27,7 +27,8 @@ Guardrails → Backup → Apply → Snapshot → Health → Decide → (Regress)
 
 - **Guardrails** — a small, high-signal policy check runs *first*. Block-severity
   findings (a floating `:latest` tag, a plaintext secret) stop the change before any
-  backup. Warn-severity findings (no healthcheck, no restart policy, no resource
+  backup. An **archived** stack is also refused here — it must be explicitly
+  restored (`yd lifecycle --event restore`) before a deploy or upgrade can resurrect it. Warn-severity findings (no healthcheck, no restart policy, no resource
   limits) are printed to the operator. For an upgrade, guardrails evaluate the
   **post-change** compose — the image you are actually about to deploy.
 - **Backup** — a pre-change recovery point is taken. If it fails, the change aborts.

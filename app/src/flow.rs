@@ -72,6 +72,13 @@ pub fn run(
     // finding (floating tag, plaintext secret). An operator is thereby told when
     // a healthcheck is desired but absent — the health-gate is otherwise a no-op.
     trace.push(Phase::Guardrails);
+    // Lifecycle gate: an archived stack is retired — refuse to resurrect it via
+    // a deploy/upgrade. The operator must explicitly `yd lifecycle ... restore`.
+    if crate::lifecycle::read_state(stack_dir) == crate::lifecycle::LifecycleState::Archived {
+        return Ok(Outcome::Blocked(
+            "stack is archived — restore it (yd lifecycle --event restore) before deploying".into(),
+        ));
+    }
     let yaml = std::fs::read_to_string(change.compose_path).unwrap_or_default();
     // For an upgrade, evaluate what will actually be deployed (post-Apply), not
     // the stale on-disk image — else a floating tag / secret the upgrade would
@@ -257,6 +264,43 @@ mod tests {
         let mut trace = Vec::new();
         let out = run(&ch, &NoopBackup, &OkDeployer, &mut trace).unwrap();
         assert_eq!(out, Outcome::Upgraded, "a floating-tag fix must not be blocked");
+    }
+
+    #[test]
+    fn archived_stack_is_blocked_before_any_side_effect() {
+        use crate::lifecycle::{write_state, LifecycleState};
+        let (dir, compose) = repo("services:\n  app:\n    image: nginx:1.27\n");
+        write_state(dir.path(), LifecycleState::Archived).unwrap();
+        let spy = SpyDeployer::default();
+        let mut trace = Vec::new();
+        // plain deploy
+        let out = run(&change(&compose, dir.path()), &NoopBackup, &spy, &mut trace).unwrap();
+        assert!(matches!(out, Outcome::Blocked(_)), "archived must block: {out:?}");
+        assert!(!*spy.called.borrow(), "must not deploy an archived stack");
+        assert_eq!(trace, vec![Phase::Guardrails]);
+        // upgrade too
+        let ch = Change {
+            compose_path: &compose,
+            repo: dir.path(),
+            image_change: Some(("app", "nginx:1.29")),
+            confirmed: true,
+            accept: true,
+        };
+        let mut t2 = Vec::new();
+        let out2 = run(&ch, &NoopBackup, &spy, &mut t2).unwrap();
+        assert!(matches!(out2, Outcome::Blocked(_)), "archived upgrade must block");
+    }
+
+    #[test]
+    fn deprecated_and_active_are_not_gated_by_lifecycle() {
+        use crate::lifecycle::{write_state, LifecycleState};
+        for state in [LifecycleState::Active, LifecycleState::Deprecated, LifecycleState::Draft] {
+            let (dir, compose) = repo("services:\n  app:\n    image: nginx:1.27\n");
+            write_state(dir.path(), state).unwrap();
+            let mut trace = Vec::new();
+            let out = run(&change(&compose, dir.path()), &NoopBackup, &OkDeployer, &mut trace).unwrap();
+            assert_eq!(out, Outcome::Deployed, "{state:?} must not be lifecycle-blocked");
+        }
     }
 
     #[test]
