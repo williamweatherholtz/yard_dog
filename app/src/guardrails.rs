@@ -120,6 +120,56 @@ pub fn run_guardrails(yaml: &str) -> Vec<Finding> {
                 });
             }
         }
+
+        // -- container-hardening (security) lens --
+        let block = |rule: &str, message: String| Finding {
+            service: service.clone(),
+            rule: rule.to_string(),
+            severity: Severity::Block,
+            message,
+        };
+        if svc.get("privileged").and_then(|v| v.as_bool()) == Some(true) {
+            out.push(block("privileged", "runs privileged (full host device/root access)".into()));
+        }
+        // A docker-socket mount is host-root-equivalent.
+        if let Some(serde_yaml::Value::Sequence(vols)) = svc.get("volumes") {
+            for vol in vols {
+                let src = match vol {
+                    serde_yaml::Value::String(s) => s.split(':').next().unwrap_or("").to_string(),
+                    serde_yaml::Value::Mapping(m) => m
+                        .get("source")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    _ => continue,
+                };
+                if src.ends_with("docker.sock") {
+                    out.push(block("docker-socket", "mounts the Docker socket (equivalent to host root)".into()));
+                }
+            }
+        }
+        // Dangerous added capabilities.
+        if let Some(serde_yaml::Value::Sequence(caps)) = svc.get("cap_add") {
+            for cap in caps {
+                if let Some(c) = cap.as_str() {
+                    let cu = c.trim_start_matches("CAP_").to_ascii_uppercase();
+                    if matches!(cu.as_str(), "SYS_ADMIN" | "SYS_PTRACE" | "SYS_MODULE" | "NET_ADMIN" | "ALL") {
+                        out.push(Finding {
+                            service: service.clone(),
+                            rule: "dangerous-cap".into(),
+                            severity: if cu == "SYS_ADMIN" || cu == "ALL" { Severity::Block } else { Severity::Warn },
+                            message: format!("adds dangerous capability {c}"),
+                        });
+                    }
+                }
+            }
+        }
+        if svc.get("network_mode").and_then(|v| v.as_str()) == Some("host") {
+            out.push(warn(&service, "host-network", "uses host networking (no network isolation)".into()));
+        }
+        if svc.get("pid").and_then(|v| v.as_str()) == Some("host") {
+            out.push(warn(&service, "host-pid", "shares the host PID namespace".into()));
+        }
     }
     out
 }
@@ -157,6 +207,31 @@ mod tests {
 
         let inline = "services:\n  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: hunter2\n";
         assert!(rules(&run_guardrails(inline)).contains(&"plaintext-secret"), "inline secret still flagged");
+    }
+
+    #[test]
+    fn flags_container_hardening_risks() {
+        let yaml = "services:\n  app:\n    image: nginx:1.27\n    privileged: true\n    network_mode: host\n    pid: host\n    cap_add:\n      - SYS_ADMIN\n      - NET_ADMIN\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n";
+        let f = run_guardrails(yaml);
+        let rules = rules(&f);
+        assert!(rules.contains(&"privileged"), "privileged flagged: {f:?}");
+        assert!(f.iter().any(|x| x.rule == "privileged" && x.severity == Severity::Block));
+        assert!(rules.contains(&"docker-socket"), "docker.sock mount flagged");
+        assert!(f.iter().any(|x| x.rule == "docker-socket" && x.severity == Severity::Block));
+        assert!(rules.contains(&"dangerous-cap"), "SYS_ADMIN cap flagged");
+        assert!(rules.contains(&"host-network"), "network_mode host flagged");
+        assert!(rules.contains(&"host-pid"), "pid host flagged");
+        assert!(!verdict(&f), "a privileged/docker-socket stack must not pass");
+    }
+
+    #[test]
+    fn ordinary_service_has_no_security_findings() {
+        let yaml = "services:\n  web:\n    image: nginx:1.27\n    cap_add:\n      - NET_BIND_SERVICE\n";
+        let f = run_guardrails(yaml);
+        let rules = rules(&f);
+        for r in ["privileged", "docker-socket", "dangerous-cap", "host-network", "host-pid"] {
+            assert!(!rules.contains(&r), "benign service should not trip {r}");
+        }
     }
 
     #[test]

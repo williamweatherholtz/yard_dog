@@ -26,8 +26,10 @@ Guardrails → Backup → Apply → Snapshot → Health → Decide → (Regress)
 ```
 
 - **Guardrails** — a small, high-signal policy check runs *first*. Block-severity
-  findings (a floating `:latest` tag, a plaintext secret) stop the change before any
-  backup. An **archived** stack is also refused here — it must be explicitly
+  findings (a floating `:latest` tag, a plaintext secret, a **privileged** container,
+  a mounted **Docker socket**, a dangerous **`cap_add`** like `SYS_ADMIN`) stop the
+  change before any backup; warnings (missing healthcheck/restart/limits, host
+  networking or host PID) are surfaced. An **archived** stack is also refused here — it must be explicitly
   restored (`yd lifecycle --event restore`) before a deploy or upgrade can resurrect it. Warn-severity findings (no healthcheck, no restart policy, no resource
   limits) are printed to the operator. For an upgrade, guardrails evaluate the
   **post-change** compose — the image you are actually about to deploy.
