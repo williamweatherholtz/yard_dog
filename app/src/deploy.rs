@@ -53,6 +53,9 @@ pub fn safe_deploy(
         Outcome::Deployed | Outcome::Upgraded => DeployOutcome::Deployed,
         Outcome::Regressed(_) => DeployOutcome::RolledBack,
         Outcome::RegressFailed(r) => DeployOutcome::RollbackFailed(r),
+        // A plain deploy never carries an image change, so NoSuchService cannot
+        // arise here; map defensively to keep the match exhaustive.
+        Outcome::NoSuchService(r) => DeployOutcome::Blocked(r),
         Outcome::Skipped => DeployOutcome::Skipped,
         Outcome::Blocked(r) => DeployOutcome::Blocked(r),
         Outcome::BackupFailed(r) => DeployOutcome::BackupFailed(r),

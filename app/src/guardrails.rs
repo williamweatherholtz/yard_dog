@@ -20,6 +20,11 @@ pub struct Finding {
 
 fn key_is_secret(key: &str) -> bool {
     let k = key.to_ascii_uppercase();
+    // A *_FILE key is the Docker-secrets convention — a path to a mounted secret,
+    // not an inline secret — so it is not a plaintext-secret risk.
+    if k.ends_with("_FILE") {
+        return false;
+    }
     ["PASSWORD", "SECRET", "TOKEN", "APIKEY", "API_KEY", "ACCESS_KEY", "PRIVATE_KEY"]
         .iter()
         .any(|needle| k.contains(needle))
@@ -139,6 +144,19 @@ mod tests {
         assert!(f.iter().any(|x| x.rule == "floating-tag" && x.severity == Severity::Block));
         assert!(f.iter().any(|x| x.rule == "no-healthcheck" && x.severity == Severity::Warn));
         assert!(f.iter().any(|x| x.rule == "plaintext-secret" && x.severity == Severity::Block));
+    }
+
+    #[test]
+    fn file_secret_reference_is_not_flagged_plaintext() {
+        // *_FILE is the Docker-secrets convention (a path to a mounted secret),
+        // which is more secure — it must not be flagged as a plaintext secret,
+        // while a real inline secret still is.
+        let yaml = "services:\n  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD_FILE: /run/secrets/db_password\n";
+        let f = run_guardrails(yaml);
+        assert!(!rules(&f).contains(&"plaintext-secret"), "a *_FILE ref is not plaintext: {f:?}");
+
+        let inline = "services:\n  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: hunter2\n";
+        assert!(rules(&run_guardrails(inline)).contains(&"plaintext-secret"), "inline secret still flagged");
     }
 
     #[test]

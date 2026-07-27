@@ -14,6 +14,8 @@ pub enum UpgradeOutcome {
     Regressed(String),
     /// Upgrade failed and the rollback redeploy also failed — needs attention.
     RegressFailed(String),
+    /// The target service has no image line to upgrade — nothing was applied.
+    NoSuchService(String),
     Skipped,
     Blocked(String),
     BackupFailed(String),
@@ -26,6 +28,13 @@ pub enum UpgradeOutcome {
 /// Being pure over the text, it also previews what an upgrade will deploy (e.g.
 /// for guardrail evaluation) without touching disk.
 pub fn image_changed_yaml(yaml: &str, service: &str, image: &str) -> io::Result<String> {
+    Ok(try_image_change(yaml, service, image).unwrap_or_else(|| yaml.to_string()))
+}
+
+/// Like `image_changed_yaml`, but returns `None` when the target service has no
+/// image line to change (an absent or build-only service) — so callers can fail
+/// loudly instead of silently applying nothing.
+pub fn try_image_change(yaml: &str, service: &str, image: &str) -> Option<String> {
     let indent_of = |l: &str| l.len() - l.trim_start().len();
     let mut out: Vec<String> = Vec::new();
     let mut services_indent: Option<usize> = None;
@@ -97,11 +106,14 @@ pub fn image_changed_yaml(yaml: &str, service: &str, image: &str) -> io::Result<
         }
     }
 
+    if !replaced {
+        return None;
+    }
     let mut result = out.join("\n");
     if yaml.ends_with('\n') {
         result.push('\n');
     }
-    Ok(result)
+    Some(result)
 }
 
 /// Rewrite a single service's `image` in the compose file, preserving the rest.
@@ -138,6 +150,7 @@ pub fn safe_upgrade(
         Outcome::Upgraded | Outcome::Deployed => UpgradeOutcome::Upgraded,
         Outcome::Regressed(r) => UpgradeOutcome::Regressed(r),
         Outcome::RegressFailed(r) => UpgradeOutcome::RegressFailed(r),
+        Outcome::NoSuchService(r) => UpgradeOutcome::NoSuchService(r),
         Outcome::Skipped => UpgradeOutcome::Skipped,
         Outcome::Blocked(r) => UpgradeOutcome::Blocked(r),
         Outcome::BackupFailed(r) => UpgradeOutcome::BackupFailed(r),
@@ -248,6 +261,14 @@ mod tests {
         let out = safe_upgrade(&compose, dir.path(), "app", "nginx:1.29", true, true, &NoopBackup, &FailThenOkDeployer::default()).unwrap();
         assert!(matches!(out, UpgradeOutcome::Regressed(_)));
         assert_eq!(app_image(&compose), "nginx:1.27", "reverted on failure");
+    }
+
+    #[test]
+    fn upgrade_of_unknown_service_is_no_such_service() {
+        let (dir, compose) = repo_with_app();
+        let out = safe_upgrade(&compose, dir.path(), "nope", "x:1", true, true, &NoopBackup, &OkDeployer).unwrap();
+        assert!(matches!(out, UpgradeOutcome::NoSuchService(_)), "got {out:?}");
+        assert_eq!(app_image(&compose), "nginx:1.27", "no change on an unknown-service upgrade");
     }
 
     #[test]

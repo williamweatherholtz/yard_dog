@@ -505,6 +505,10 @@ fn run_upgrade(
         eprintln!("CRITICAL: upgrade failed and rollback did not recover — stack needs attention: {why}");
         std::process::exit(4);
     }
+    if let yarddog::upgrade::UpgradeOutcome::NoSuchService(why) = &outcome {
+        eprintln!("upgrade not applied: {why}");
+        std::process::exit(3);
+    }
     Ok(())
 }
 

@@ -37,6 +37,8 @@ pub enum Outcome {
     /// The change failed AND the rollback redeploy also failed — the live stack
     /// is in a bad state and needs operator attention.
     RegressFailed(String),
+    /// The upgrade target service has no image to change — nothing was applied.
+    NoSuchService(String),
     Skipped,
     Blocked(String),
     BackupFailed(String),
@@ -84,9 +86,16 @@ pub fn run(
     // the stale on-disk image — else a floating tag / secret the upgrade would
     // introduce is missed, and a violation the upgrade fixes wrongly blocks.
     let effective = match change.image_change {
-        Some((service, image)) => {
-            crate::upgrade::image_changed_yaml(&yaml, service, image).unwrap_or_else(|_| yaml.clone())
-        }
+        Some((service, image)) => match crate::upgrade::try_image_change(&yaml, service, image) {
+            Some(changed) => changed,
+            // No image line for this service — fail loudly before any side effect
+            // instead of snapshotting/deploying an unchanged config as an "upgrade".
+            None => {
+                return Ok(Outcome::NoSuchService(format!(
+                    "service '{service}' has no image to upgrade"
+                )))
+            }
+        },
         None => yaml.clone(),
     };
     let findings = run_guardrails(&effective);
@@ -247,6 +256,26 @@ mod tests {
         assert!(matches!(out, Outcome::Blocked(_)), "got {out:?}");
         assert!(!*spy.called.borrow(), "must not deploy a blocked upgrade");
         assert_eq!(trace, vec![Phase::Guardrails]);
+    }
+
+    #[test]
+    fn upgrade_of_absent_service_fails_loudly() {
+        // A typo'd (or build-only) service has no image line — the upgrade must
+        // NOT silently report success. Nothing is deployed and nothing changes.
+        let (dir, compose) = repo("services:\n  app:\n    image: nginx:1.27\n");
+        let spy = SpyDeployer::default();
+        let ch = Change {
+            compose_path: &compose,
+            repo: dir.path(),
+            image_change: Some(("typo", "nginx:1.29")),
+            confirmed: true,
+            accept: true,
+        };
+        let mut trace = Vec::new();
+        let out = run(&ch, &NoopBackup, &spy, &mut trace).unwrap();
+        assert!(matches!(out, Outcome::NoSuchService(_)), "got {out:?}");
+        assert!(!*spy.called.borrow(), "must not deploy when the change cannot apply");
+        assert!(std::fs::read_to_string(&compose).unwrap().contains("nginx:1.27"), "compose unchanged");
     }
 
     #[test]
