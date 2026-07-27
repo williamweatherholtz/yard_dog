@@ -1,6 +1,6 @@
 [package]
 name = "yarddog"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Yard Dog — path-intelligence and existence-guard core for single-host Docker/Compose"
 license = "AGPL-3.0-or-later"
