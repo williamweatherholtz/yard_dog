@@ -292,3 +292,26 @@ fn import_places_stack_under_target() {
         "imported stack should appear under the target dir"
     );
 }
+
+#[test]
+fn push_mirrors_backup_to_target() {
+    let from = tempfile::tempdir().unwrap();
+    std::fs::create_dir(from.path().join("sub")).unwrap();
+    std::fs::write(from.path().join("sub").join("b.txt"), b"payload").unwrap();
+    let to = tempfile::tempdir().unwrap();
+
+    Command::cargo_bin("yd")
+        .unwrap()
+        .arg("push")
+        .arg("--from")
+        .arg(from.path().to_str().unwrap())
+        .arg("--to")
+        .arg(to.path().to_str().unwrap())
+        .assert()
+        .success();
+
+    assert!(
+        to.path().join("sub").join("b.txt").exists(),
+        "push should mirror the nested file to the target"
+    );
+}

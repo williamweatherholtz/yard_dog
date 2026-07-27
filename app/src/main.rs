@@ -81,6 +81,15 @@ enum Command {
         #[arg(long)]
         dest: String,
     },
+    /// Mirror a backup directory to a destination (local target for now).
+    Push {
+        /// Source backup directory.
+        #[arg(long)]
+        from: String,
+        /// Destination directory (stand-in remote / mount).
+        #[arg(long)]
+        to: String,
+    },
     /// Prune old backup snapshots in a destination, keeping the newest N.
     Prune {
         /// Backup destination directory (snapshots are subdirectories).
@@ -108,6 +117,7 @@ fn main() {
         Command::Import { file, into, name } => run_import(&file, &into, name.as_deref()),
         Command::Notify { message } => run_notify(&message),
         Command::Verify { dest } => run_verify(&dest),
+        Command::Push { from, to } => run_push(&from, &to),
         Command::Prune { dest, keep } => run_prune(&dest, keep),
     };
     if let Err(e) = result {
@@ -301,6 +311,18 @@ fn run_verify(dest: &str) -> Result<(), String> {
         }
         std::process::exit(2);
     }
+    Ok(())
+}
+
+fn run_push(from: &str, to: &str) -> Result<(), String> {
+    let n = yarddog::transport::sync_dir(
+        std::path::Path::new(from),
+        &yarddog::transport::LocalTransport {
+            target: std::path::PathBuf::from(to),
+        },
+    )
+    .map_err(|e| format!("push failed: {e}"))?;
+    println!("pushed {n} file(s) to {to}");
     Ok(())
 }
 
