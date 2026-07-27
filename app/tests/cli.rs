@@ -364,3 +364,19 @@ fn classify_labels_services_by_kind() {
     assert!(out.contains("db: datastore"), "got:\n{out}");
     assert!(out.contains("web: web"), "got:\n{out}");
 }
+
+#[test]
+fn updates_lists_services_with_kind_and_action() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("c.yml");
+    std::fs::write(
+        &f,
+        "services:\n  db:\n    image: postgres:16\n  web:\n    image: nginx:1.27\n    ports:\n      - \"80:80\"\n",
+    )
+    .unwrap();
+    let a = Command::cargo_bin("yd").unwrap().arg("updates").arg(f.to_str().unwrap()).assert().success();
+    let out = String::from_utf8_lossy(&a.get_output().stdout).to_string();
+    assert!(out.contains("db"), "got:\n{out}");
+    assert!(out.contains("web"), "got:\n{out}");
+    assert!(out.contains("kind=datastore"), "got:\n{out}");
+}

@@ -32,6 +32,11 @@ enum Command {
         /// Path to the docker-compose file.
         file: String,
     },
+    /// Show image-update status + the kind-gated action per service.
+    Updates {
+        /// Path to the docker-compose file.
+        file: String,
+    },
     /// Apply remediations for detected path issues (dry-run unless --yes).
     Fix {
         /// Path to the docker-compose file.
@@ -150,6 +155,7 @@ fn main() {
         Command::Inspect { file } => run_inspect(&file),
         Command::Check { file } => run_check(&file),
         Command::Classify { file } => run_classify(&file),
+        Command::Updates { file } => run_updates(&file),
         Command::Fix { file, yes } => run_fix(&file, yes),
         Command::Backup {
             file,
@@ -197,6 +203,33 @@ fn analyze(file: &str) -> Result<Analysis, String> {
 fn run_inspect(file: &str) -> Result<(), String> {
     let (reports, _ids) = analyze(file)?;
     print!("{}", render_text(&reports));
+    Ok(())
+}
+
+/// Registry client placeholder: real remote-digest lookup + running-digest
+/// resolution (and private-registry auth) land in the next increment. Until
+/// then update status is reported as unknown.
+struct PendingRegistry;
+impl yarddog::updates::RegistryClient for PendingRegistry {
+    fn remote_digest(&self, _image: &str) -> Option<String> {
+        None
+    }
+}
+
+fn run_updates(file: &str) -> Result<(), String> {
+    let yaml = std::fs::read_to_string(file).map_err(|e| format!("reading {file}: {e}"))?;
+    let services = yarddog::workload::parse_services(&yaml);
+    let running = std::collections::HashMap::new();
+    let plan = yarddog::updates::build_update_plan(&services, &running, &PendingRegistry);
+    for item in &plan {
+        println!(
+            "{}: kind={} status={:?} action={}",
+            item.service,
+            item.kind.as_str(),
+            item.status,
+            item.action.as_str()
+        );
+    }
     Ok(())
 }
 

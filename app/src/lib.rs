@@ -20,6 +20,7 @@ pub mod report;
 pub mod retention;
 pub mod stacks;
 pub mod transport;
+pub mod updates;
 pub mod workload;
 pub mod verify;
 
