@@ -57,6 +57,16 @@ pub fn init(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Ensure `dir` is a versioning repo: initialise it (with the opinionated
+/// ignore/attributes) when it has no `.git`, and do nothing when it is already a
+/// repo — so we never clobber an operator's existing git config.
+pub fn ensure_repo(dir: &Path) -> io::Result<()> {
+    if dir.join(".git").exists() {
+        return Ok(());
+    }
+    init(dir)
+}
+
 /// Commit the current config as a snapshot; returns the commit sha.
 pub fn snapshot(dir: &Path, message: &str) -> io::Result<String> {
     git_ok(dir, &["add", "-A"])?;
@@ -149,6 +159,20 @@ mod tests {
         assert!(tracked.contains("docker-compose.yml"));
         assert!(!tracked.contains(".env"), "secrets must not be tracked");
         assert!(!tracked.contains("x.sqlite"), "data must not be tracked");
+    }
+
+    #[test]
+    fn ensure_repo_inits_once_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!dir.path().join(".git").exists());
+        ensure_repo(dir.path()).unwrap();
+        assert!(dir.path().join(".git").exists(), "fresh dir gets a repo");
+        // a snapshot works after ensure_repo
+        std::fs::write(dir.path().join("docker-compose.yml"), "v1").unwrap();
+        let sha = snapshot(dir.path(), "first").unwrap();
+        // second ensure_repo is a no-op and does not lose history
+        ensure_repo(dir.path()).unwrap();
+        assert_eq!(history(dir.path()).unwrap()[0].0, sha, "history preserved; not re-init'd");
     }
 
     #[test]

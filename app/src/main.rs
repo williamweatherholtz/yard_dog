@@ -459,9 +459,12 @@ fn announce_guardrails(compose: &std::path::Path) {
 fn run_deploy(file: &str, yes: bool) -> Result<(), String> {
     let compose = std::path::Path::new(file);
     let stack_dir = compose.parent().unwrap_or_else(|| std::path::Path::new("."));
-    let history = stack_dir.join(".yd-history");
+    // Version the stack directory itself (gitver's ignore excludes data/secrets/
+    // .yd-backups), initialising it on first use so snapshots capture the actual
+    // compose and a rollback can restore it.
+    yarddog::gitver::ensure_repo(stack_dir).map_err(|e| format!("cannot init versioning repo: {e}"))?;
     announce_guardrails(compose);
-    let outcome = yarddog::deploy::safe_deploy(compose, &history, yes, &RealBackupHook, &RealDeployer)
+    let outcome = yarddog::deploy::safe_deploy(compose, stack_dir, yes, &RealBackupHook, &RealDeployer)
         .map_err(|e| format!("deploy failed: {e}"))?;
     println!("deploy: {outcome:?}");
     if matches!(outcome, yarddog::deploy::DeployOutcome::BackupFailed(_)) {
@@ -485,6 +488,8 @@ fn run_upgrade(
     yes: bool,
 ) -> Result<(), String> {
     // --yes proceeds and auto-accepts on a passing healthcheck.
+    yarddog::gitver::ensure_repo(std::path::Path::new(repo))
+        .map_err(|e| format!("cannot init versioning repo: {e}"))?;
     announce_guardrails(std::path::Path::new(file));
     let outcome = yarddog::upgrade::safe_upgrade(
         std::path::Path::new(file),
