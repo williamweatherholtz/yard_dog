@@ -19,6 +19,7 @@ pub mod lifecycle;
 pub mod mounttable;
 pub mod notify;
 pub mod ownership;
+pub mod preflight;
 pub mod remediation;
 pub mod report;
 pub mod retention;

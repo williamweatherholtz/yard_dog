@@ -148,6 +148,11 @@ enum Command {
     },
     /// Check whether a newer Yard Dog release is available.
     SelfUpdate,
+    /// Preflight a stack: one go/no-go verdict from guardrails + lifecycle.
+    Doctor {
+        /// Path to the docker-compose file.
+        file: String,
+    },
     /// Instantiate a new guardrail-clean starter stack from a workload kind.
     New {
         #[arg(long)]
@@ -247,6 +252,7 @@ fn main() {
         Command::Version { action } => run_version(action),
         Command::Pin { action } => run_pin(action),
         Command::SelfUpdate => run_self_update(),
+        Command::Doctor { file } => run_doctor(&file),
         Command::New { into, name, kind, service } => run_new(&into, &name, &kind, service.as_deref()),
         Command::Lifecycle { repo, event } => run_lifecycle(&repo, event.as_deref()),
     };
@@ -627,6 +633,27 @@ fn run_self_update() -> Result<(), String> {
     let current = env!("CARGO_PKG_VERSION");
     let status = yarddog::selfupdate::check(current, &NoReleaseInfo);
     println!("yd {current}: {status:?}");
+    Ok(())
+}
+
+fn run_doctor(file: &str) -> Result<(), String> {
+    let compose = std::path::Path::new(file);
+    let yaml = std::fs::read_to_string(compose).map_err(|e| format!("cannot read {file}: {e}"))?;
+    let stack_dir = compose.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let state = yarddog::lifecycle::read_state(stack_dir);
+    let p = yarddog::preflight::assess(&yaml, state);
+    println!(
+        "preflight: {} — lifecycle={}, {} block(s), {} warning(s)",
+        if p.ready { "READY" } else { "NOT READY" },
+        p.lifecycle.as_str(),
+        p.blocks,
+        p.warns
+    );
+    // Show the operator the actual findings so the verdict is actionable.
+    announce_guardrails(compose);
+    if !p.ready {
+        std::process::exit(3);
+    }
     Ok(())
 }
 

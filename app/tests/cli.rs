@@ -392,6 +392,19 @@ fn pin_add_then_list() {
 }
 
 #[test]
+fn doctor_passes_clean_stack_and_fails_floating_tag() {
+    let dir = tempfile::tempdir().unwrap();
+    let clean = dir.path().join("clean.yml");
+    std::fs::write(&clean, "services:\n  web:\n    image: nginx:1.27\n    restart: unless-stopped\n    mem_limit: 256m\n    healthcheck:\n      test: [\"CMD\", \"true\"]\n").unwrap();
+    let a = Command::cargo_bin("yd").unwrap().arg("doctor").arg(clean.to_str().unwrap()).assert().success();
+    assert!(String::from_utf8_lossy(&a.get_output().stdout).contains("READY"));
+
+    let bad = dir.path().join("bad.yml");
+    std::fs::write(&bad, "services:\n  web:\n    image: nginx:latest\n").unwrap();
+    Command::cargo_bin("yd").unwrap().arg("doctor").arg(bad.to_str().unwrap()).assert().failure();
+}
+
+#[test]
 fn new_instantiates_a_guardrail_clean_draft_stack() {
     let dir = tempfile::tempdir().unwrap();
     let into = dir.path().to_str().unwrap();
