@@ -175,6 +175,28 @@ fn e2e_uc_health_gated_upgrade() {
     .failure();
 }
 
+// ---- ucDriftDetection ---------------------------------------------------------
+#[test]
+#[ignore = "requires Docker"]
+fn e2e_uc_drift_detection() {
+    require_docker!("drift_detection");
+    let s = Stack::new("drift", |n| nginx_body(n, "nginx:1.27-alpine", 80));
+    yd().args(["deploy", &s.compose_str(), "--yes"]).assert().success();
+
+    // in sync -> no drift
+    yd().args(["drift", &s.compose_str()])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("no drift"));
+
+    // edit the declared image WITHOUT redeploying -> ImageChanged
+    std::fs::write(s.compose(), nginx_body(&s.name, "nginx:1.29-alpine", 80)).unwrap();
+    yd().args(["drift", &s.compose_str()])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("ImageChanged"));
+}
+
 // ---- ucBackupVerifiedRestore (no Docker needed) -------------------------------
 #[test]
 #[ignore = "part of the e2e suite"]

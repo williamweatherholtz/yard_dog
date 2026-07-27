@@ -87,6 +87,16 @@ package YardDogPersonas {
         :>> extensions = "A *_FILE secret reference (Docker-secrets convention) is NOT flagged; an upgrade that would introduce a floating tag is blocked on the post-change compose.";
     }
 
+    use case ucDriftDetection : UseCase {
+        :>> id = "d703fb7a-66ed-4a80-bec8-68f16bc2c804";
+        :>> title = "See drift between the declared compose and the running stack";
+        :>> createdAt = "2026-07-27";
+        :>> createdBy = "wweatherholtz";
+        :>> description = "Riley wants to know when what is running no longer matches the compose on disk (an out-of-band change, a not-yet-applied edit, or a stopped service).";
+        :>> mainSuccess = "With the stack deployed, `yd drift <compose>` reports 'no drift'. After Riley edits the declared image without redeploying, `yd drift` reports ImageChanged (declared vs running); a stopped service reports Missing; a container with no compose entry reports Unexpected.";
+        :>> extensions = "When the Docker daemon is unreachable, drift reports the declared services and notes running-state is unavailable rather than guessing.";
+    }
+
     use case ucLifecycle : UseCase {
         :>> id = "7dd97abc-6f17-4546-9b80-0b06b3488062";
         :>> title = "Manage a stack through its lifecycle states";

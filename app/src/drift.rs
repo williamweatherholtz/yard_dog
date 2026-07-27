@@ -6,6 +6,34 @@
 use crate::compose::parse_service_images;
 use std::collections::HashMap;
 
+/// Parse `docker compose ps --format json` output (newline-delimited JSON
+/// objects, or a JSON array) into a running service->image map. Pure over the
+/// text so the docker shell-out stays a thin adapter.
+pub fn parse_compose_ps(output: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let mut insert = |v: &serde_json::Value| {
+        if let (Some(svc), Some(img)) = (v.get("Service").and_then(|x| x.as_str()), v.get("Image").and_then(|x| x.as_str())) {
+            map.insert(svc.to_string(), img.to_string());
+        }
+    };
+    let trimmed = output.trim();
+    if let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        for it in &items {
+            insert(it);
+        }
+    } else {
+        for line in trimmed.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                insert(&v);
+            }
+        }
+    }
+    map
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriftKind {
     /// Declared in compose but not running.
@@ -75,6 +103,21 @@ mod tests {
 
     fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn parse_compose_ps_extracts_service_images() {
+        // real `docker compose ps --format json` shape (newline-delimited)
+        let ndjson = "{\"Service\":\"web\",\"Image\":\"nginx:1.27-alpine\",\"State\":\"running\"}\n{\"Service\":\"db\",\"Image\":\"postgres:16\",\"State\":\"running\"}";
+        let m = parse_compose_ps(ndjson);
+        assert_eq!(m.get("web").map(String::as_str), Some("nginx:1.27-alpine"));
+        assert_eq!(m.get("db").map(String::as_str), Some("postgres:16"));
+        assert_eq!(m.len(), 2);
+        // a JSON array is also accepted
+        let arr = "[{\"Service\":\"a\",\"Image\":\"img:1\"}]";
+        assert_eq!(parse_compose_ps(arr).get("a").map(String::as_str), Some("img:1"));
+        // no running containers => empty map (not a crash)
+        assert!(parse_compose_ps("").is_empty());
     }
 
     #[test]

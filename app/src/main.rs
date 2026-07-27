@@ -318,15 +318,28 @@ fn run_updates(file: &str) -> Result<(), String> {
 }
 
 fn run_drift(file: &str) -> Result<(), String> {
-    // Placeholder: running-state introspection via docker is the next increment.
-    struct NoRunning;
-    impl yarddog::drift::RunningState for NoRunning {
+    // Real running-state: `docker compose -f <compose> ps --format json`.
+    // None only when docker is unreachable; an empty map means nothing running.
+    struct DockerRunning {
+        compose: std::path::PathBuf,
+    }
+    impl yarddog::drift::RunningState for DockerRunning {
         fn running_images(&self) -> Option<std::collections::HashMap<String, String>> {
-            None
+            let out = std::process::Command::new("docker")
+                .args(["compose", "-f"])
+                .arg(&self.compose)
+                .args(["ps", "--format", "json"])
+                .output()
+                .ok()?;
+            if !out.status.success() {
+                return None;
+            }
+            Some(yarddog::drift::parse_compose_ps(&String::from_utf8_lossy(&out.stdout)))
         }
     }
+    let running = DockerRunning { compose: std::path::PathBuf::from(file) };
     let yaml = std::fs::read_to_string(file).map_err(|e| format!("reading {file}: {e}"))?;
-    match yarddog::drift::drift_report(&yaml, &NoRunning) {
+    match yarddog::drift::drift_report(&yaml, &running) {
         Some(items) if items.is_empty() => println!("no drift"),
         Some(items) => {
             for i in &items {
