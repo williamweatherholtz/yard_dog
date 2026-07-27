@@ -87,6 +87,16 @@ package YardDogPersonas {
         :>> extensions = "A *_FILE secret reference (Docker-secrets convention) is NOT flagged; an upgrade that would introduce a floating tag is blocked on the post-change compose.";
     }
 
+    use case ucBrowserControlPlane : UseCase {
+        :>> id = "3f1b765d-7cec-4d6c-8b63-8c6a4cb3716d";
+        :>> title = "Operate the homelab from a browser";
+        :>> createdAt = "2026-07-27";
+        :>> createdBy = "wweatherholtz";
+        :>> description = "Riley prefers a dashboard to the terminal for day-to-day operation, but still wants the CLI's safety.";
+        :>> mainSuccess = "Riley runs `yd serve` and opens http://127.0.0.1:8770: the dashboard lists every stack with its lifecycle and service count; opening one shows services (with workload kind), the guardrail findings, the preflight READY/NOT-READY verdict, and lifecycle controls. Deploy / Upgrade / Back up / lifecycle transitions / Down run through the same guarded CLI paths and stream their output back.";
+        :>> extensions = "The server binds loopback only; a request with a non-loopback Host is refused (403); a path parameter with `..` or an absolute path is refused; a mutating verb sent as GET is 405. Secret values are never rendered.";
+    }
+
     use case ucUpdateCheck : UseCase {
         :>> id = "6ee4e5d1-8a7c-4a81-8a6d-afb786550e45";
         :>> title = "See which images have an update available";

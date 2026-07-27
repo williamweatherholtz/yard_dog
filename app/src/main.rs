@@ -148,6 +148,15 @@ enum Command {
     },
     /// Check whether a newer Yard Dog release is available.
     SelfUpdate,
+    /// Serve the loopback-only browser control plane over the stacks under a root.
+    Serve {
+        /// Directory whose stacks the UI manages (defaults to the current dir).
+        #[arg(long, default_value = ".")]
+        root: String,
+        /// TCP port on 127.0.0.1 (loopback only).
+        #[arg(long, default_value_t = 8770)]
+        port: u16,
+    },
     /// Preflight a stack: one go/no-go verdict from guardrails + lifecycle.
     Doctor {
         /// Path to the docker-compose file.
@@ -252,6 +261,9 @@ fn main() {
         Command::Version { action } => run_version(action),
         Command::Pin { action } => run_pin(action),
         Command::SelfUpdate => run_self_update(),
+        Command::Serve { root, port } => {
+            yarddog::web::serve(port, std::path::Path::new(&root)).map_err(|e| e.to_string())
+        }
         Command::Doctor { file } => run_doctor(&file),
         Command::New { into, name, kind, service } => run_new(&into, &name, &kind, service.as_deref()),
         Command::Lifecycle { repo, event } => run_lifecycle(&repo, event.as_deref()),

@@ -1,0 +1,374 @@
+//! `yd serve` — a loopback-only browser control plane. It is a thin wrapper over
+//! the same library the CLI uses (read/detail views) and over the `yd` binary
+//! itself (actions, via an argument vector — never a shell — so there is no
+//! command injection). Security posture (needSecureByDefault):
+//!   * binds 127.0.0.1 ONLY (never 0.0.0.0);
+//!   * rejects any request whose Host header is not a loopback name/address,
+//!     which defeats DNS-rebinding attacks against a no-auth local server;
+//!   * mutations are POST-only;
+//!   * every path parameter is confined under the served root (no absolute
+//!     paths, no `..`), so the API can never read or write outside it.
+
+use crate::{guardrails, lifecycle, preflight, stacks, workload};
+use std::io;
+use std::path::{Path, PathBuf};
+use tiny_http::{Header, Method, Response, Server};
+
+/// True if `host` (a Host header, possibly with a port) is a loopback address or
+/// `localhost`. Real 127.0.0.0/8 and ::1 pass; a domain like `127.evil.com` does
+/// not (it is not a parseable loopback IP).
+pub fn host_is_loopback(host: &str) -> bool {
+    let hostname = if let Some(rest) = host.strip_prefix('[') {
+        // IPv6 literal: [::1]:port
+        rest.split(']').next().unwrap_or("")
+    } else {
+        host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host)
+    };
+    if hostname == "localhost" {
+        return true;
+    }
+    hostname
+        .parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+/// Confine a client-supplied path under `root`: reject absolute paths and any
+/// `..` component, then join. The result is guaranteed to be within `root`.
+pub fn safe_join(root: &Path, rel: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    let p = Path::new(rel);
+    if rel.is_empty() {
+        return None;
+    }
+    // Allow only plain relative components — reject `..`, and any absolute marker
+    // (RootDir like "/etc", or a Windows drive Prefix like "C:\"). This holds on
+    // every platform, where `is_absolute()` alone does not (e.g. "/x" on Windows).
+    for c in p.components() {
+        match c {
+            Component::Normal(_) | Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    Some(root.join(p))
+}
+
+/// A lifecycle event name the API accepts (allow-list, not free text).
+fn valid_event(ev: &str) -> bool {
+    matches!(ev, "activate" | "deprecate" | "archive" | "restore")
+}
+
+// ---- JSON read views (pure over the library) ---------------------------------
+
+fn json_escape(s: &str) -> String {
+    serde_json::Value::String(s.to_string()).to_string()
+}
+
+/// `GET /api/stacks` — the stacks discovered under root, each with lifecycle.
+fn stacks_json(root: &Path) -> String {
+    let list = stacks::discover_stacks(root).unwrap_or_default();
+    let items: Vec<String> = list
+        .iter()
+        .map(|s| {
+            let rel = s
+                .compose_path
+                .strip_prefix(root)
+                .unwrap_or(&s.compose_path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let dir = s.compose_path.parent().unwrap_or(root);
+            let state = lifecycle::read_state(dir);
+            let yaml = std::fs::read_to_string(&s.compose_path).unwrap_or_default();
+            let n = workload::parse_services(&yaml).len();
+            format!(
+                "{{\"name\":{},\"compose\":{},\"lifecycle\":{},\"services\":{}}}",
+                json_escape(&s.name),
+                json_escape(&rel),
+                json_escape(state.as_str()),
+                n
+            )
+        })
+        .collect();
+    format!("{{\"root\":{},\"stacks\":[{}]}}", json_escape(&root.to_string_lossy()), items.join(","))
+}
+
+/// `GET /api/stack?compose=REL` — detail: services, guardrails, preflight, state.
+fn stack_detail_json(root: &Path, rel: &str) -> Option<String> {
+    let compose = safe_join(root, rel)?;
+    let yaml = std::fs::read_to_string(&compose).ok()?;
+    let dir = compose.parent().unwrap_or(root);
+    let state = lifecycle::read_state(dir);
+    let services: Vec<String> = workload::parse_services(&yaml)
+        .iter()
+        .map(|s| {
+            let kind = workload::classify(s);
+            format!(
+                "{{\"name\":{},\"image\":{},\"kind\":{}}}",
+                json_escape(&s.name),
+                json_escape(s.image.as_deref().unwrap_or("")),
+                json_escape(kind.as_str())
+            )
+        })
+        .collect();
+    let findings: Vec<String> = guardrails::run_guardrails(&yaml)
+        .iter()
+        .map(|f| {
+            let sev = match f.severity {
+                guardrails::Severity::Block => "block",
+                guardrails::Severity::Warn => "warn",
+            };
+            format!(
+                "{{\"service\":{},\"rule\":{},\"severity\":{},\"message\":{}}}",
+                json_escape(&f.service),
+                json_escape(&f.rule),
+                json_escape(sev),
+                json_escape(&f.message)
+            )
+        })
+        .collect();
+    let p = preflight::assess(&yaml, state);
+    Some(format!(
+        "{{\"compose\":{},\"lifecycle\":{},\"ready\":{},\"blocks\":{},\"warns\":{},\"services\":[{}],\"guardrails\":[{}]}}",
+        json_escape(rel),
+        json_escape(state.as_str()),
+        p.ready,
+        p.blocks,
+        p.warns,
+        services.join(","),
+        findings.join(",")
+    ))
+}
+
+// ---- action handlers (exec the yd binary; no shell) --------------------------
+
+/// Path to this binary, so the server invokes the same `yd` it ships with.
+fn yd_bin() -> PathBuf {
+    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("yd"))
+}
+
+/// Run `yd` (or docker) with a fixed arg vector; return a JSON result object.
+fn run_tool(program: &Path, args: &[String]) -> String {
+    match std::process::Command::new(program).args(args).output() {
+        Ok(out) => format!(
+            "{{\"ok\":{},\"exit\":{},\"stdout\":{},\"stderr\":{}}}",
+            out.status.success(),
+            out.status.code().unwrap_or(-1),
+            json_escape(&String::from_utf8_lossy(&out.stdout)),
+            json_escape(&String::from_utf8_lossy(&out.stderr))
+        ),
+        Err(e) => format!("{{\"ok\":false,\"exit\":-1,\"stdout\":\"\",\"stderr\":{}}}", json_escape(&e.to_string())),
+    }
+}
+
+fn field<'a>(v: &'a serde_json::Value, k: &str) -> Option<&'a str> {
+    v.get(k).and_then(|x| x.as_str())
+}
+
+/// Dispatch a POST action. Returns (status, json body).
+fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return (400, "{\"error\":\"invalid json\"}".into());
+    };
+    let yd = yd_bin();
+    let bad = |m: &str| (400u16, format!("{{\"error\":{}}}", json_escape(m)));
+    let compose_abs = |rel: &str| safe_join(root, rel).map(|p| p.to_string_lossy().to_string());
+
+    match path {
+        "/api/deploy" => {
+            let Some(rel) = field(&v, "compose") else { return bad("compose required") };
+            let Some(abs) = compose_abs(rel) else { return bad("path outside root") };
+            (200, run_tool(&yd, &["deploy".into(), abs, "--yes".into()]))
+        }
+        "/api/down" => {
+            let Some(rel) = field(&v, "compose") else { return bad("compose required") };
+            let Some(abs) = compose_abs(rel) else { return bad("path outside root") };
+            (200, run_tool(Path::new("docker"), &["compose".into(), "-f".into(), abs, "down".into()]))
+        }
+        "/api/upgrade" => {
+            let (Some(rel), Some(service), Some(image)) = (field(&v, "compose"), field(&v, "service"), field(&v, "image")) else {
+                return bad("compose, service, image required");
+            };
+            let Some(abs) = compose_abs(rel) else { return bad("path outside root") };
+            let repo = Path::new(&abs).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or(abs.clone());
+            (200, run_tool(&yd, &["upgrade".into(), abs, "--repo".into(), repo, "--service".into(), service.into(), "--image".into(), image.into(), "--yes".into()]))
+        }
+        "/api/lifecycle" => {
+            let (Some(rel), Some(event)) = (field(&v, "compose"), field(&v, "event")) else {
+                return bad("compose, event required");
+            };
+            if !valid_event(event) {
+                return bad("invalid event");
+            }
+            let Some(abs) = compose_abs(rel) else { return bad("path outside root") };
+            let repo = Path::new(&abs).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or(abs);
+            (200, run_tool(&yd, &["lifecycle".into(), "--repo".into(), repo, "--event".into(), event.into()]))
+        }
+        "/api/backup" => {
+            let Some(rel) = field(&v, "compose") else { return bad("compose required") };
+            let dest = field(&v, "dest").unwrap_or(".yd-backups");
+            if safe_join(root, dest).is_none() {
+                return bad("dest outside root");
+            }
+            let Some(abs) = compose_abs(rel) else { return bad("path outside root") };
+            (200, run_tool(&yd, &["backup".into(), abs, "--run".into(), "--dest".into(), dest.into()]))
+        }
+        _ => (404, "{\"error\":\"unknown action\"}".into()),
+    }
+}
+
+const UI_HTML: &str = include_str!("ui.html");
+
+fn header(name: &str, value: &str) -> Header {
+    Header::from_bytes(name.as_bytes(), value.as_bytes()).unwrap()
+}
+
+fn json_response(status: u16, body: String) -> Response<io::Cursor<Vec<u8>>> {
+    Response::from_string(body)
+        .with_status_code(status)
+        .with_header(header("Content-Type", "application/json"))
+}
+
+/// Start the loopback control-plane server. Never binds anything but 127.0.0.1.
+pub fn serve(port: u16, root: &Path) -> io::Result<()> {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let server = Server::http(("127.0.0.1", port))
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("cannot bind 127.0.0.1:{port}: {e}")))?;
+    println!("Yard Dog control plane on http://127.0.0.1:{port}  (loopback only — Ctrl-C to stop)");
+    println!("serving stacks under {}", root.display());
+
+    for mut request in server.incoming_requests() {
+        // Security: refuse any non-loopback Host (DNS-rebinding defense).
+        let host_ok = request
+            .headers()
+            .iter()
+            .find(|h| h.field.equiv("Host"))
+            .map(|h| host_is_loopback(h.value.as_str()))
+            .unwrap_or(false);
+        if !host_ok {
+            let _ = request.respond(json_response(403, "{\"error\":\"forbidden host\"}".into()));
+            continue;
+        }
+
+        let method = request.method().clone();
+        let url = request.url().to_string();
+        let path = url.split('?').next().unwrap_or("").to_string();
+        let query = url.split_once('?').map(|(_, q)| q.to_string()).unwrap_or_default();
+
+        let response: Response<io::Cursor<Vec<u8>>> = match (&method, path.as_str()) {
+            (Method::Get, "/") | (Method::Get, "/index.html") => Response::from_string(UI_HTML)
+                .with_header(header("Content-Type", "text/html; charset=utf-8")),
+            (Method::Get, "/api/stacks") => json_response(200, stacks_json(&root)),
+            (Method::Get, "/api/stack") => {
+                match query_param(&query, "compose").and_then(|rel| stack_detail_json(&root, &rel)) {
+                    Some(body) => json_response(200, body),
+                    None => json_response(404, "{\"error\":\"not found or outside root\"}".into()),
+                }
+            }
+            (Method::Get, "/api/drift") => docker_read(&root, &query, "drift"),
+            (Method::Get, "/api/updates") => docker_read(&root, &query, "updates"),
+            (Method::Post, p) if p.starts_with("/api/") => {
+                let mut body = String::new();
+                let _ = request.as_reader().read_to_string(&mut body);
+                let (status, json) = handle_action(&root, p, &body);
+                json_response(status, json)
+            }
+            // A mutating verb reaching a GET-only route (or vice versa).
+            (_, p) if p.starts_with("/api/") => json_response(405, "{\"error\":\"method not allowed\"}".into()),
+            _ => json_response(404, "{\"error\":\"not found\"}".into()),
+        };
+        let _ = request.respond(response);
+    }
+    Ok(())
+}
+
+fn query_param(query: &str, key: &str) -> Option<String> {
+    query.split('&').find_map(|pair| {
+        let (k, v) = pair.split_once('=')?;
+        if k == key {
+            Some(percent_decode(v))
+        } else {
+            None
+        }
+    })
+}
+
+/// Minimal percent-decoding for query values (enough for file paths).
+fn percent_decode(s: &str) -> String {
+    let bytes = s.replace('+', " ");
+    let mut out = Vec::new();
+    let mut it = bytes.bytes().peekable();
+    while let Some(b) = it.next() {
+        if b == b'%' {
+            let hi = it.next();
+            let lo = it.next();
+            if let (Some(h), Some(l)) = (hi, lo) {
+                if let (Some(h), Some(l)) = ((h as char).to_digit(16), (l as char).to_digit(16)) {
+                    out.push((h * 16 + l) as u8);
+                    continue;
+                }
+            }
+        } else {
+            out.push(b);
+        }
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// Shell out to `yd drift|updates` for a compose (docker-dependent read).
+fn docker_read(root: &Path, query: &str, sub: &str) -> Response<io::Cursor<Vec<u8>>> {
+    let Some(rel) = query_param(query, "compose") else {
+        return json_response(400, "{\"error\":\"compose required\"}".into());
+    };
+    let Some(abs) = safe_join(root, &rel) else {
+        return json_response(400, "{\"error\":\"path outside root\"}".into());
+    };
+    json_response(200, run_tool(&yd_bin(), &[sub.to_string(), abs.to_string_lossy().to_string()]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_hosts_are_allowed_others_rejected() {
+        assert!(host_is_loopback("127.0.0.1"));
+        assert!(host_is_loopback("127.0.0.1:8770"));
+        assert!(host_is_loopback("localhost"));
+        assert!(host_is_loopback("localhost:8770"));
+        assert!(host_is_loopback("[::1]:8770"));
+        assert!(host_is_loopback("127.5.6.7"), "all of 127.0.0.0/8 is loopback");
+        // not loopback:
+        assert!(!host_is_loopback("127.evil.com"), "a domain starting 127. is not a loopback IP");
+        assert!(!host_is_loopback("evil.com"));
+        assert!(!host_is_loopback("192.168.1.10:8770"));
+        assert!(!host_is_loopback("10.0.0.1"));
+    }
+
+    #[test]
+    fn safe_join_confines_to_root() {
+        let root = Path::new("/srv/stacks");
+        assert!(safe_join(root, "immich/docker-compose.yml").is_some());
+        // traversal + absolute are refused
+        assert!(safe_join(root, "../etc/passwd").is_none());
+        assert!(safe_join(root, "a/../../b").is_none());
+        assert!(safe_join(root, "/etc/passwd").is_none());
+    }
+
+    #[test]
+    fn only_known_lifecycle_events_are_accepted() {
+        for ok in ["activate", "deprecate", "archive", "restore"] {
+            assert!(valid_event(ok));
+        }
+        assert!(!valid_event("rm -rf"));
+        assert!(!valid_event(""));
+    }
+
+    #[test]
+    fn actions_reject_paths_outside_root() {
+        let root = Path::new("/srv/stacks");
+        let (status, _) = handle_action(root, "/api/deploy", "{\"compose\":\"../../etc/x.yml\"}");
+        assert_eq!(status, 400);
+        let (status, _) = handle_action(root, "/api/lifecycle", "{\"compose\":\"a.yml\",\"event\":\"boom\"}");
+        assert_eq!(status, 400, "invalid event rejected");
+    }
+}

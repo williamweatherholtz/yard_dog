@@ -59,6 +59,7 @@ Run `yd <command> --help` for full flags. Grouped by what they touch:
 | `yd inspect <compose>` | Classify every mount (host bind / named / anonymous / network) and report existence + remediation. |
 | `yd check <compose>` | Run the preventative policy guardrails over a compose file. |
 | `yd doctor <compose>` | One preflight verdict (READY / NOT READY) from guardrails + lifecycle, with a matching exit code. |
+| `yd serve [--root <dir>] [--port N]` | Serve the loopback-only browser control plane over the stacks under `<dir>` (default `.`, port 8770). |
 | `yd classify <compose>` | Classify each service into a workload kind (datastore / web / worker / cron / proxy). |
 | `yd updates <compose>` | Show image-update status (real digest check against Docker Hub / GHCR) plus the kind-gated action per service. |
 | `yd drift <compose>` | Report drift between the declared compose and the running stack. |
@@ -98,6 +99,31 @@ Run `yd <command> --help` for full flags. Grouped by what they touch:
 | `yd self-update` | Check whether a newer Yard Dog release is available. |
 
 ---
+
+## Browser control plane
+
+`yd serve` starts a **loopback-only** browser UI (a thin wrapper over the same
+library and CLI) for operators who prefer a dashboard to the terminal:
+
+```sh
+cd /srv/stacks      # the directory holding your compose stacks
+yd serve            # → http://127.0.0.1:8770  (loopback only)
+```
+
+The dashboard lists every stack with its lifecycle and service count; opening one
+shows its services (with workload kind), guardrail findings, the READY/NOT-READY
+preflight verdict, and lifecycle controls — and lets you deploy, upgrade, back up,
+check drift/updates, transition lifecycle, or take the stack down. Every action
+runs through the same guarded CLI path (guardrails → backup → health-gate →
+rollback).
+
+**Security model (secure by default).** The server binds `127.0.0.1` only; it
+never listens on a non-loopback address. It rejects any request whose `Host`
+header is not a loopback name/address (a DNS-rebinding defense for a no-auth local
+server), serves mutations over `POST` only, and confines every path parameter
+under the served root (no absolute paths, no `..`). Secret values are never
+rendered. For remote access, front it with your own SSH tunnel or authenticated
+reverse proxy rather than widening the bind.
 
 ## Exit codes
 

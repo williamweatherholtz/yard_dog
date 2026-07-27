@@ -31,6 +31,7 @@ pub mod updates;
 pub mod upgrade;
 pub mod workload;
 pub mod verify;
+pub mod web;
 
 /// Crate version, surfaced by the CLI.
 pub fn version() -> &'static str {
