@@ -380,3 +380,13 @@ fn updates_lists_services_with_kind_and_action() {
     assert!(out.contains("web"), "got:\n{out}");
     assert!(out.contains("kind=datastore"), "got:\n{out}");
 }
+
+#[test]
+fn pin_add_then_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().to_str().unwrap();
+    Command::cargo_bin("yd").unwrap().args(["pin", "add", "--repo", repo, "--service", "immich"]).assert().success();
+    let a = Command::cargo_bin("yd").unwrap().args(["pin", "list", "--repo", repo]).assert().success();
+    let out = String::from_utf8_lossy(&a.get_output().stdout).to_string();
+    assert!(out.contains("immich"), "got:\n{out}");
+}

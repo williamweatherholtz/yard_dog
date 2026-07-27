@@ -4,6 +4,7 @@
 
 use crate::workload::{classify, ServiceView, WorkloadKind};
 use std::collections::HashMap;
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateStatus {
@@ -96,6 +97,37 @@ pub fn build_update_plan(
         .collect()
 }
 
+/// Read the pinned service names from `dir/.yd-pins`.
+pub fn read_pins(dir: &Path) -> Vec<String> {
+    std::fs::read_to_string(dir.join(".yd-pins"))
+        .map(|s| {
+            s.lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Pin `service` (append to `dir/.yd-pins`, de-duplicated).
+pub fn write_pin(dir: &Path, service: &str) -> std::io::Result<()> {
+    let mut pins = read_pins(dir);
+    if pins.iter().any(|p| p == service) {
+        return Ok(());
+    }
+    pins.push(service.to_string());
+    std::fs::write(dir.join(".yd-pins"), format!("{}\n", pins.join("\n")))
+}
+
+/// Zero out the update action for any pinned service.
+pub fn apply_pins(plan: &mut [UpdateItem], pins: &[String]) {
+    for item in plan.iter_mut() {
+        if pins.iter().any(|p| p == &item.service) {
+            item.action = UpdateAction::None;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +185,37 @@ mod tests {
         let web = plan.iter().find(|i| i.service == "web").unwrap();
         assert_eq!(web.status, UpdateStatus::UpToDate);
         assert_eq!(web.action, UpdateAction::None);
+    }
+
+    #[test]
+    fn pins_persist_and_dedupe() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(read_pins(dir.path()).is_empty());
+        write_pin(dir.path(), "db").unwrap();
+        write_pin(dir.path(), "db").unwrap();
+        assert_eq!(read_pins(dir.path()), vec!["db".to_string()]);
+        write_pin(dir.path(), "web").unwrap();
+        assert_eq!(read_pins(dir.path()), vec!["db".to_string(), "web".to_string()]);
+    }
+
+    #[test]
+    fn apply_pins_holds_pinned_services() {
+        let mut plan = vec![
+            UpdateItem {
+                service: "db".into(),
+                status: UpdateStatus::UpdateAvailable,
+                kind: WorkloadKind::Web,
+                action: UpdateAction::Apply,
+            },
+            UpdateItem {
+                service: "web".into(),
+                status: UpdateStatus::UpdateAvailable,
+                kind: WorkloadKind::Web,
+                action: UpdateAction::Apply,
+            },
+        ];
+        apply_pins(&mut plan, &["db".to_string()]);
+        assert_eq!(plan[0].action, UpdateAction::None, "pinned service is held");
+        assert_eq!(plan[1].action, UpdateAction::Apply, "unpinned unchanged");
     }
 }

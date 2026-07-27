@@ -119,6 +119,27 @@ enum Command {
         #[command(subcommand)]
         action: VersionAction,
     },
+    /// Pin services to hold their updates.
+    Pin {
+        #[command(subcommand)]
+        action: PinAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum PinAction {
+    /// Pin a service (hold its updates).
+    Add {
+        #[arg(long)]
+        repo: String,
+        #[arg(long)]
+        service: String,
+    },
+    /// List pinned services.
+    List {
+        #[arg(long)]
+        repo: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -171,6 +192,7 @@ fn main() {
         Command::Push { from, to } => run_push(&from, &to),
         Command::Prune { dest, keep } => run_prune(&dest, keep),
         Command::Version { action } => run_version(action),
+        Command::Pin { action } => run_pin(action),
     };
     if let Err(e) = result {
         eprintln!("yd: {e}");
@@ -451,6 +473,23 @@ fn run_push(from: &str, to: &str) -> Result<(), String> {
     )
     .map_err(|e| format!("push failed: {e}"))?;
     println!("pushed {n} file(s) to {to}");
+    Ok(())
+}
+
+fn run_pin(action: PinAction) -> Result<(), String> {
+    use yarddog::updates::{read_pins, write_pin};
+    let p = std::path::Path::new;
+    match action {
+        PinAction::Add { repo, service } => {
+            write_pin(p(&repo), &service).map_err(|e| format!("pin failed: {e}"))?;
+            println!("pinned {service}");
+        }
+        PinAction::List { repo } => {
+            for s in read_pins(p(&repo)) {
+                println!("{s}");
+            }
+        }
+    }
     Ok(())
 }
 
