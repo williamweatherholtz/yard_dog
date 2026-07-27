@@ -571,6 +571,17 @@ fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
                 Err(e) => (200, format!("{{\"ok\":false,\"error\":{}}}", json_escape(&e.to_string()))),
             }
         }
+        // Restore a stack's DATA from a backup (verify-gated in the CLI; destructive).
+        "/api/backup/restore" => {
+            let Some(rel) = field(&v, "compose") else { return bad("compose required") };
+            let Some(abs) = compose_abs(rel) else { return bad("path outside root") };
+            let name = field(&v, "name").unwrap_or(".yd-backups");
+            if safe_join(root, name).is_none() && !name.starts_with(".yd-backups") {
+                return bad("dest outside root");
+            }
+            let dest = Path::new(&abs).parent().map(|p| p.join(name)).map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+            (200, run_tool(&yd, &["restore".into(), abs, "--from".into(), dest, "--yes".into()]))
+        }
         // Fleet fan-out: run each discovered stack through the per-stack guarded
         // CLI path (sequential, to avoid docker contention). sub = "backup"|"check".
         "/api/fleet/backup" | "/api/fleet/check" => {

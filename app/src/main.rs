@@ -162,6 +162,17 @@ enum Command {
         #[arg(long)]
         apply: bool,
     },
+    /// Restore a stack's bind-mounted DATA from a backup (verify-gated; --yes to apply).
+    Restore {
+        /// Path to the docker-compose file.
+        file: String,
+        /// The backup directory to restore from (a recovery point).
+        #[arg(long)]
+        from: String,
+        /// Actually overwrite current data (without this it is a dry run).
+        #[arg(long)]
+        yes: bool,
+    },
     /// Serve the loopback-only browser control plane over the stacks under a root.
     Serve {
         /// Directory whose stacks the UI manages (defaults to the current dir).
@@ -323,6 +334,7 @@ fn main() {
         Command::Git { action } => run_git(action),
         Command::Fleet { action } => run_fleet(action),
         Command::SelfUpdate { apply } => run_self_update(apply),
+        Command::Restore { file, from, yes } => run_restore(&file, &from, yes),
         Command::Serve { root, port } => {
             yarddog::web::serve(port, std::path::Path::new(&root)).map_err(|e| e.to_string())
         }
@@ -792,6 +804,30 @@ fn run_lifecycle(repo: &str, event: Option<&str>) -> Result<(), String> {
         }
     };
     println!("lifecycle: {}", state.as_str());
+    Ok(())
+}
+
+fn run_restore(file: &str, from: &str, yes: bool) -> Result<(), String> {
+    let compose = std::path::Path::new(file);
+    let stack_dir = compose.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let yaml = std::fs::read_to_string(compose).map_err(|e| format!("reading {file}: {e}"))?;
+    let env: HashMap<String, String> = std::env::vars().collect();
+    let from_p = std::path::Path::new(from);
+    let dest = if from_p.is_absolute() { from_p.to_path_buf() } else { stack_dir.join(from) };
+    match yarddog::backup::restore_bind_data(&yaml, &env, stack_dir, &dest, yes)
+        .map_err(|e| format!("restore failed: {e}"))?
+    {
+        yarddog::backup::RestoreOutcome::Restored(v) => {
+            println!("restored {} bind path(s): {:?}", v.len(), v);
+        }
+        yarddog::backup::RestoreOutcome::VerifyFailed(n) => {
+            eprintln!("refused: backup failed verification ({n} issue(s)) — not restoring");
+            std::process::exit(3);
+        }
+        yarddog::backup::RestoreOutcome::Skipped => {
+            println!("dry run — pass --yes to restore (this OVERWRITES current data)");
+        }
+    }
     Ok(())
 }
 

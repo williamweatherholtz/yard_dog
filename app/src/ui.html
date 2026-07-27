@@ -341,9 +341,11 @@ async function renderBackups(){
   const {data}=await api("/api/backups?compose="+encodeURIComponent(current));
   const items=data.items||[];
   if(!items.length){ b.append(el("p","muted","No recovery points yet — take a backup.")); return; }
-  const tbl=el("table"); const hr=el("tr"); ["Recovery point","Files","Integrity"].forEach(h=>hr.append(el("th",null,h))); tbl.append(hr);
+  const tbl=el("table"); const hr=el("tr"); ["Recovery point","Files","Integrity",""].forEach(h=>hr.append(el("th",null,h))); tbl.append(hr);
   for(const it of items){ const tr=el("tr"); tr.append(el("td","img",it.name)); tr.append(el("td",null,String(it.entries)));
-    const v=el("td"); v.append(it.ok?chip("ok","verified"):chip("bad",it.issues+" issue"+(it.issues===1?"":"s"))); tr.append(v); tbl.append(tr); }
+    const v=el("td"); v.append(it.ok?chip("ok","verified"):chip("bad",it.issues+" issue"+(it.issues===1?"":"s"))); tr.append(v);
+    const act=el("td"); const rb=el("button","danger","Restore…"); rb.onclick=()=>{ if(confirm(`Restore data from “${it.name}”? This OVERWRITES the stack's current bind data (the backup is verified first).`)) doAct("/api/backup/restore",{compose:current,name:it.name},"restore data"); }; act.append(rb); tr.append(act);
+    tbl.append(tr); }
   b.append(tbl);
 }
 

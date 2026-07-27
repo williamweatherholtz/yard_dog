@@ -3,9 +3,10 @@
 //! application-consistent backup plan. This module PLANS only — it executes
 //! nothing (execution is a later increment).
 
-use crate::classify::{classify, MountType, NetworkProbe, VolumeInspector};
+use crate::classify::{classify, MountType, NetworkProbe, VolumeInfo, VolumeInspector};
 use crate::compose::{parse_mounts, parse_service_images, RawMount};
 use std::collections::HashMap;
+use std::path::Path;
 
 /// A recognised database engine and the consistent-dump method it implies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -256,11 +257,155 @@ pub fn backup_stack(
     execute_plan(&plan, dest_dir, confirmed, runner, archiver)
 }
 
+// ---- data restore (the reverse of a bind-data backup) -----------------------
+
+// Bind classification needs no daemon (a host path vs a named token); these
+// no-op probes let restore enumerate bind targets without Docker.
+struct NoVol;
+impl VolumeInspector for NoVol {
+    fn inspect(&self, _n: &str) -> Option<VolumeInfo> {
+        None
+    }
+}
+struct NoNet;
+impl NetworkProbe for NoNet {
+    fn fs_type(&self, _p: &str) -> Option<String> {
+        None
+    }
+}
+
+fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if src.is_file() {
+        if let Some(p) = dst.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        std::fs::copy(src, dst)?;
+        return Ok(());
+    }
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &to)?;
+        } else {
+            if let Some(p) = to.parent() {
+                std::fs::create_dir_all(p)?;
+            }
+            std::fs::copy(entry.path(), &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// Resolve a bind source against the stack dir (as compose does) for relative paths.
+fn resolve_bind(stack_dir: &Path, source: &str) -> std::path::PathBuf {
+    let p = Path::new(source);
+    if p.is_absolute() || source.starts_with('~') {
+        p.to_path_buf()
+    } else {
+        stack_dir.join(source)
+    }
+}
+
+/// The outcome of a data-restore attempt.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RestoreOutcome {
+    /// Restored these bind sources (paths) from the backup.
+    Restored(Vec<String>),
+    /// The backup failed its integrity manifest — refused to restore (N findings).
+    VerifyFailed(usize),
+    /// No `--yes`: nothing was done.
+    Skipped,
+}
+
+/// Restore a stack's bind-mounted data from a backup directory. Verifies the
+/// backup against its manifest first (refusing on any mismatch), then copies each
+/// backed-up bind dir/file back to its source. DB dumps and volume archives are
+/// not restored here (docker/engine-specific — a later increment).
+pub fn restore_bind_data(
+    yaml: &str,
+    env: &HashMap<String, String>,
+    stack_dir: &Path,
+    dest_dir: &Path,
+    confirmed: bool,
+) -> std::io::Result<RestoreOutcome> {
+    if !confirmed {
+        return Ok(RestoreOutcome::Skipped);
+    }
+    // Verify the source backup first, if it carries a manifest.
+    if let Ok(text) = std::fs::read_to_string(dest_dir.join("manifest.json")) {
+        if let Ok(manifest) = serde_json::from_str::<crate::verify::Manifest>(&text) {
+            let findings = crate::verify::verify(dest_dir, &manifest)?;
+            if !findings.is_empty() {
+                return Ok(RestoreOutcome::VerifyFailed(findings.len()));
+            }
+        }
+    }
+    let mounts = parse_mounts(yaml, env).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e:?}")))?;
+    let mut restored = Vec::new();
+    for t in enumerate_stack_data(&mounts, &NoVol, &NoNet) {
+        if t.kind != TargetKind::Bind {
+            continue; // volumes / network are not bind-restored here
+        }
+        let base = Path::new(&t.name)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "root".to_string());
+        let backup_path = dest_dir.join(&base);
+        if backup_path.exists() {
+            copy_tree(&backup_path, &resolve_bind(stack_dir, &t.name))?;
+            restored.push(t.name.clone());
+        }
+    }
+    Ok(RestoreOutcome::Restored(restored))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::classify::VolumeInfo;
     use std::cell::RefCell;
+
+    #[test]
+    fn restore_bind_data_copies_backed_up_files_back() {
+        let stack = tempfile::tempdir().unwrap();
+        // current (to be overwritten) bind data
+        std::fs::create_dir_all(stack.path().join("html")).unwrap();
+        std::fs::write(stack.path().join("html").join("index.html"), b"CURRENT").unwrap();
+        // a backup dest holding the good copy
+        let dest = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dest.path().join("html")).unwrap();
+        std::fs::write(dest.path().join("html").join("index.html"), b"BACKED-UP").unwrap();
+
+        let yaml = "services:\n  web:\n    image: nginx:1.27\n    volumes:\n      - ./html:/usr/share/nginx/html\n";
+        let env = HashMap::new();
+
+        // unconfirmed = no-op
+        assert_eq!(restore_bind_data(yaml, &env, stack.path(), dest.path(), false).unwrap(), RestoreOutcome::Skipped);
+
+        // confirmed restores the backed-up content over the current
+        let out = restore_bind_data(yaml, &env, stack.path(), dest.path(), true).unwrap();
+        assert!(matches!(out, RestoreOutcome::Restored(ref v) if v.iter().any(|s| s.contains("html"))), "got {out:?}");
+        assert_eq!(std::fs::read_to_string(stack.path().join("html").join("index.html")).unwrap(), "BACKED-UP");
+    }
+
+    #[test]
+    fn restore_refuses_a_backup_that_fails_verification() {
+        let stack = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(stack.path().join("html")).unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dest.path().join("html")).unwrap();
+        std::fs::write(dest.path().join("html").join("f"), b"data").unwrap();
+        // a manifest that expects a file which does NOT match (tampered/missing)
+        let mut m = crate::verify::Manifest::default();
+        m.entries.insert("html/f".into(), crate::verify::Entry { sha256: "deadbeef".into(), size: 4 });
+        std::fs::write(dest.path().join("manifest.json"), serde_json::to_string(&m).unwrap()).unwrap();
+
+        let yaml = "services:\n  web:\n    image: nginx:1.27\n    volumes:\n      - ./html:/x\n";
+        let out = restore_bind_data(yaml, &HashMap::new(), stack.path(), dest.path(), true).unwrap();
+        assert!(matches!(out, RestoreOutcome::VerifyFailed(_)), "must refuse a bad backup: {out:?}");
+    }
 
     #[derive(Default)]
     struct RecRunner {

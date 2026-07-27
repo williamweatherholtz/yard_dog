@@ -79,6 +79,7 @@ Run `yd <command> --help` for full flags. Grouped by what they touch:
 |---|---|
 | `yd backup <compose> [--plan] [--run --dest <dir>]` | Plan or run an application-consistent backup (DB dumps + file copies + manifest). |
 | `yd verify --dest <dir>` | Verify a backup's integrity against its recorded manifest. |
+| `yd restore <compose> --from <dir> [--yes]` | Restore a stack's bind data from a backup — verified first, dry-run without `--yes`. |
 | `yd push --from <dir> --to <target>` | Mirror a backup directory to a destination. |
 | `yd prune --dest <dir> --keep <N>` | Prune old backup snapshots, keeping the newest N. |
 
