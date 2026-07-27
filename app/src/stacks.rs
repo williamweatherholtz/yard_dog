@@ -46,76 +46,6 @@ pub fn discover_stacks(root: &Path) -> io::Result<Vec<Stack>> {
     Ok(stacks)
 }
 
-/// Snapshot a compose file (+ sibling `.env`) into the next numbered version
-/// under `history_dir`; returns the version name.
-pub fn snapshot_config(compose_path: &Path, history_dir: &Path) -> io::Result<String> {
-    std::fs::create_dir_all(history_dir)?;
-    let next = list_history(history_dir)?
-        .iter()
-        .filter_map(|v| v.parse::<u32>().ok())
-        .max()
-        .unwrap_or(0)
-        + 1;
-    let version = next.to_string();
-    let vdir = history_dir.join(&version);
-    std::fs::create_dir_all(&vdir)?;
-
-    let file_name = compose_path
-        .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "compose path has no file name"))?;
-    std::fs::copy(compose_path, vdir.join(file_name))?;
-    if let Some(parent) = compose_path.parent() {
-        let env = parent.join(".env");
-        if env.is_file() {
-            std::fs::copy(&env, vdir.join(".env"))?;
-        }
-    }
-    Ok(version)
-}
-
-/// List version names under `history_dir`, newest (highest number) first.
-pub fn list_history(history_dir: &Path) -> io::Result<Vec<String>> {
-    if !history_dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut versions: Vec<u32> = Vec::new();
-    for entry in std::fs::read_dir(history_dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            if let Ok(n) = entry.file_name().to_string_lossy().parse::<u32>() {
-                versions.push(n);
-            }
-        }
-    }
-    versions.sort_unstable_by(|a, b| b.cmp(a));
-    Ok(versions.into_iter().map(|n| n.to_string()).collect())
-}
-
-/// Restore `version` from `history_dir` back to `compose_path` — only when
-/// `confirmed`. Returns whether a restore happened.
-pub fn rollback_config(
-    history_dir: &Path,
-    version: &str,
-    compose_path: &Path,
-    confirmed: bool,
-) -> io::Result<bool> {
-    if !confirmed {
-        return Ok(false);
-    }
-    let vdir = history_dir.join(version);
-    let file_name = compose_path
-        .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "compose path has no file name"))?;
-    std::fs::copy(vdir.join(file_name), compose_path)?;
-    let env = vdir.join(".env");
-    if env.is_file() {
-        if let Some(parent) = compose_path.parent() {
-            std::fs::copy(&env, parent.join(".env"))?;
-        }
-    }
-    Ok(true)
-}
-
 /// Import an existing compose file (+ sibling `.env`) into `stacks_root` as a
 /// named stack, without modifying the original. Refuses to overwrite an
 /// existing stack. `name` defaults to the compose file's parent directory name.
@@ -178,47 +108,6 @@ mod tests {
         assert!(names.contains(&"blog"));
         assert!(!names.contains(&"notes"));
         assert_eq!(stacks.len(), 2);
-    }
-
-    #[test]
-    fn snapshot_then_list_newest_first() {
-        let dir = tempfile::tempdir().unwrap();
-        let compose = dir.path().join("docker-compose.yml");
-        std::fs::write(&compose, "v1").unwrap();
-        std::fs::write(dir.path().join(".env"), "K=1").unwrap();
-        let history = dir.path().join(".history");
-
-        let v1 = snapshot_config(&compose, &history).unwrap();
-        std::fs::write(&compose, "v2").unwrap();
-        let v2 = snapshot_config(&compose, &history).unwrap();
-
-        assert_eq!(v1, "1");
-        assert_eq!(v2, "2");
-        assert_eq!(list_history(&history).unwrap(), vec!["2", "1"]);
-        // the snapshot captured the compose content and the .env
-        assert_eq!(
-            std::fs::read_to_string(history.join("1").join("docker-compose.yml")).unwrap(),
-            "v1"
-        );
-        assert!(history.join("1").join(".env").exists());
-    }
-
-    #[test]
-    fn rollback_restores_only_when_confirmed() {
-        let dir = tempfile::tempdir().unwrap();
-        let compose = dir.path().join("docker-compose.yml");
-        std::fs::write(&compose, "good").unwrap();
-        let history = dir.path().join(".history");
-        snapshot_config(&compose, &history).unwrap(); // version "1" = "good"
-        std::fs::write(&compose, "broken").unwrap();
-
-        // not confirmed -> no change
-        assert!(!rollback_config(&history, "1", &compose, false).unwrap());
-        assert_eq!(std::fs::read_to_string(&compose).unwrap(), "broken");
-
-        // confirmed -> restored
-        assert!(rollback_config(&history, "1", &compose, true).unwrap());
-        assert_eq!(std::fs::read_to_string(&compose).unwrap(), "good");
     }
 
     #[test]

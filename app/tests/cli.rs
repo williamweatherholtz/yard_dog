@@ -315,3 +315,17 @@ fn push_mirrors_backup_to_target() {
         "push should mirror the nested file to the target"
     );
 }
+
+#[test]
+fn version_snapshot_then_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().to_str().unwrap();
+
+    Command::cargo_bin("yd").unwrap().args(["version", "init", "--repo", repo]).assert().success();
+    std::fs::write(dir.path().join("docker-compose.yml"), "services: {}\n").unwrap();
+    Command::cargo_bin("yd").unwrap().args(["version", "snapshot", "--repo", repo, "-m", "first-snapshot"]).assert().success();
+
+    let assert = Command::cargo_bin("yd").unwrap().args(["version", "history", "--repo", repo]).assert().success();
+    let out = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+    assert!(out.contains("first-snapshot"), "history should list the snapshot; got:\n{out}");
+}

@@ -1,9 +1,9 @@
-//! Safe deployment: snapshot the config, run a pre-change backup hook, deploy,
-//! and roll back to the previous last-good config if the deploy fails. The
-//! Deployer and BackupHook are traits so the orchestration is testable without
-//! Docker.
+//! Safe deployment: run a pre-change backup, snapshot the config in git, deploy,
+//! and roll back to the previous last-good commit if the deploy fails. Config
+//! versioning is delegated to `gitver` (decGitVersioning); Deployer and
+//! BackupHook are traits so the orchestration is testable without Docker.
 
-use crate::stacks::{list_history, rollback_config, snapshot_config};
+use crate::gitver;
 use std::io;
 use std::path::Path;
 
@@ -27,10 +27,11 @@ pub enum DeployOutcome {
 }
 
 /// Deploy safely: only when `confirmed`; back up first (abort if that fails),
-/// snapshot the config, deploy, and roll back to the prior version on failure.
+/// snapshot the config in the git repo `repo_dir`, deploy, and on failure
+/// restore the prior last-good commit (as a new commit).
 pub fn safe_deploy(
     compose_path: &Path,
-    history_dir: &Path,
+    repo_dir: &Path,
     confirmed: bool,
     backup: &dyn BackupHook,
     deployer: &dyn Deployer,
@@ -45,15 +46,17 @@ pub fn safe_deploy(
         return Ok(DeployOutcome::BackupFailed(e.to_string()));
     }
 
-    // Remember the prior last-good, then snapshot the config being deployed.
-    let prior = list_history(history_dir)?.first().cloned();
-    let _version = snapshot_config(compose_path, history_dir)?;
+    // Prior last-good = current HEAD; then snapshot the config being deployed.
+    let prior = gitver::history(repo_dir)
+        .ok()
+        .and_then(|h| h.first().map(|(sha, _)| sha.clone()));
+    let _snapshot = gitver::snapshot(repo_dir, "yd deploy snapshot")?;
 
     match deployer.deploy(stack_dir) {
         Ok(()) => Ok(DeployOutcome::Deployed),
         Err(_) => {
             if let Some(good) = prior {
-                rollback_config(history_dir, &good, compose_path, true)?;
+                gitver::restore(repo_dir, &good)?;
             }
             Ok(DeployOutcome::RolledBack)
         }
@@ -104,30 +107,32 @@ mod tests {
         }
     }
 
+    fn repo() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        gitver::init(dir.path()).unwrap();
+        let compose = dir.path().join("docker-compose.yml");
+        (dir, compose)
+    }
+
     #[test]
     fn success_snapshots_and_backs_up() {
-        let dir = tempfile::tempdir().unwrap();
-        let compose = dir.path().join("docker-compose.yml");
+        let (dir, compose) = repo();
         std::fs::write(&compose, "v1").unwrap();
-        let history = dir.path().join(".history");
         let backup = RecBackup::default();
-
-        let out = safe_deploy(&compose, &history, true, &backup, &OkDeployer).unwrap();
+        let out = safe_deploy(&compose, dir.path(), true, &backup, &OkDeployer).unwrap();
         assert_eq!(out, DeployOutcome::Deployed);
         assert!(*backup.called.borrow(), "pre-change backup must run");
-        assert_eq!(list_history(&history).unwrap(), vec!["1"]);
+        assert_eq!(gitver::history(dir.path()).unwrap().len(), 1);
     }
 
     #[test]
     fn failure_rolls_back_to_last_good() {
-        let dir = tempfile::tempdir().unwrap();
-        let compose = dir.path().join("docker-compose.yml");
+        let (dir, compose) = repo();
         std::fs::write(&compose, "good").unwrap();
-        let history = dir.path().join(".history");
-        snapshot_config(&compose, &history).unwrap(); // version 1 = "good"
+        gitver::snapshot(dir.path(), "good").unwrap();
         std::fs::write(&compose, "broken").unwrap();
 
-        let out = safe_deploy(&compose, &history, true, &RecBackup::default(), &FailDeployer).unwrap();
+        let out = safe_deploy(&compose, dir.path(), true, &RecBackup::default(), &FailDeployer).unwrap();
         assert_eq!(out, DeployOutcome::RolledBack);
         assert_eq!(
             std::fs::read_to_string(&compose).unwrap(),
@@ -138,25 +143,20 @@ mod tests {
 
     #[test]
     fn backup_failure_aborts_before_deploy() {
-        let dir = tempfile::tempdir().unwrap();
-        let compose = dir.path().join("docker-compose.yml");
+        let (dir, compose) = repo();
         std::fs::write(&compose, "v1").unwrap();
-        let history = dir.path().join(".history");
         let spy = SpyDeployer::default();
-
-        let out = safe_deploy(&compose, &history, true, &FailBackup, &spy).unwrap();
+        let out = safe_deploy(&compose, dir.path(), true, &FailBackup, &spy).unwrap();
         assert!(matches!(out, DeployOutcome::BackupFailed(_)));
         assert!(!*spy.called.borrow(), "deploy must not run if backup failed");
     }
 
     #[test]
     fn skipped_without_confirmation() {
-        let dir = tempfile::tempdir().unwrap();
-        let compose = dir.path().join("docker-compose.yml");
+        let (dir, compose) = repo();
         std::fs::write(&compose, "v1").unwrap();
-        let history = dir.path().join(".history");
-        let out = safe_deploy(&compose, &history, false, &RecBackup::default(), &OkDeployer).unwrap();
+        let out = safe_deploy(&compose, dir.path(), false, &RecBackup::default(), &OkDeployer).unwrap();
         assert_eq!(out, DeployOutcome::Skipped);
-        assert!(list_history(&history).unwrap().is_empty());
+        assert!(gitver::history(dir.path()).unwrap_or_default().is_empty());
     }
 }

@@ -99,6 +99,39 @@ enum Command {
         #[arg(long)]
         keep: usize,
     },
+    /// Git-backed config versioning for a stacks repo.
+    Version {
+        #[command(subcommand)]
+        action: VersionAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum VersionAction {
+    /// Initialise the versioning repo (opinionated .gitignore + attributes).
+    Init {
+        #[arg(long)]
+        repo: String,
+    },
+    /// Commit the current config as a snapshot.
+    Snapshot {
+        #[arg(long)]
+        repo: String,
+        #[arg(long, short = 'm')]
+        message: String,
+    },
+    /// List version history (newest first).
+    History {
+        #[arg(long)]
+        repo: String,
+    },
+    /// Restore a prior version by sha (as a new commit).
+    Restore {
+        #[arg(long)]
+        repo: String,
+        #[arg(long)]
+        sha: String,
+    },
 }
 
 fn main() {
@@ -119,6 +152,7 @@ fn main() {
         Command::Verify { dest } => run_verify(&dest),
         Command::Push { from, to } => run_push(&from, &to),
         Command::Prune { dest, keep } => run_prune(&dest, keep),
+        Command::Version { action } => run_version(action),
     };
     if let Err(e) = result {
         eprintln!("yd: {e}");
@@ -339,6 +373,31 @@ fn run_push(from: &str, to: &str) -> Result<(), String> {
     )
     .map_err(|e| format!("push failed: {e}"))?;
     println!("pushed {n} file(s) to {to}");
+    Ok(())
+}
+
+fn run_version(action: VersionAction) -> Result<(), String> {
+    use yarddog::gitver;
+    let p = std::path::Path::new;
+    match action {
+        VersionAction::Init { repo } => {
+            gitver::init(p(&repo)).map_err(|e| format!("init failed: {e}"))?;
+            println!("initialised versioning at {repo}");
+        }
+        VersionAction::Snapshot { repo, message } => {
+            let sha = gitver::snapshot(p(&repo), &message).map_err(|e| format!("snapshot failed: {e}"))?;
+            println!("snapshot {}", &sha[..sha.len().min(12)]);
+        }
+        VersionAction::History { repo } => {
+            for (sha, msg) in gitver::history(p(&repo)).map_err(|e| format!("history failed: {e}"))? {
+                println!("{}  {}", &sha[..sha.len().min(12)], msg);
+            }
+        }
+        VersionAction::Restore { repo, sha } => {
+            let new = gitver::restore(p(&repo), &sha).map_err(|e| format!("restore failed: {e}"))?;
+            println!("restored as {}", &new[..new.len().min(12)]);
+        }
+    }
     Ok(())
 }
 
