@@ -127,6 +127,15 @@ The package installs `/usr/bin/yd` plus a **disabled** `yd.service`; to run the
 control plane as a service, set `YD_ROOT` in `/etc/yard-dog/yd.env` then
 `sudo systemctl enable --now yd`.
 
+**macOS (Homebrew, Apple Silicon):**
+```sh
+brew install https://raw.githubusercontent.com/williamweatherholtz/yard_dog/main/packaging/homebrew/yd.rb
+```
+**Windows (Scoop):**
+```powershell
+scoop install https://raw.githubusercontent.com/williamweatherholtz/yard_dog/main/packaging/scoop/yd.json
+```
+
 Prebuilt binaries (x86_64 + arm64 Linux, arm64 macOS, x86_64 Windows) and
 `SHA256SUMS` are attached to each [GitHub Release](https://github.com/williamweatherholtz/yard_dog/releases).
 Once installed, `yd self-update --apply` keeps it current (also SHA256-verified).

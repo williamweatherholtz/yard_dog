@@ -1,0 +1,23 @@
+{
+  "version": "0.1.3",
+  "description": "Single-host Docker Compose manager with mount intelligence and verified backup",
+  "homepage": "https://github.com/williamweatherholtz/yard_dog",
+  "license": "AGPL-3.0-or-later",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/williamweatherholtz/yard_dog/releases/download/v0.1.3/yd-x86_64-windows.exe#/yd.exe",
+      "hash": "9c05ec46139021457bac5df854710393ea4fddda0ce928f674b73b5ca2718466"
+    }
+  },
+  "bin": "yd.exe",
+  "checkver": {
+    "github": "https://github.com/williamweatherholtz/yard_dog"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/williamweatherholtz/yard_dog/releases/download/v$version/yd-x86_64-windows.exe#/yd.exe"
+      }
+    }
+  }
+}
