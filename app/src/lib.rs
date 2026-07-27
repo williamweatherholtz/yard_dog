@@ -14,6 +14,7 @@ pub mod ownership;
 pub mod remediation;
 pub mod report;
 pub mod retention;
+pub mod stacks;
 pub mod verify;
 
 /// Crate version, surfaced by the CLI.

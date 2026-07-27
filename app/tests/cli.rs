@@ -215,3 +215,24 @@ fn verify_reports_clean_then_detects_corruption() {
         .assert()
         .failure();
 }
+
+#[test]
+fn stacks_lists_only_compose_dirs() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("immich")).unwrap();
+    std::fs::write(root.path().join("immich").join("docker-compose.yml"), "services: {}").unwrap();
+    std::fs::create_dir(root.path().join("notes")).unwrap();
+    std::fs::write(root.path().join("notes").join("README.md"), "x").unwrap();
+
+    let assert = Command::cargo_bin("yd")
+        .unwrap()
+        .arg("stacks")
+        .arg("--root")
+        .arg(root.path().to_str().unwrap())
+        .assert()
+        .success();
+    let out = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+
+    assert!(out.contains("immich"), "should list the compose stack; got:\n{out}");
+    assert!(!out.contains("notes"), "should not list a non-stack dir; got:\n{out}");
+}

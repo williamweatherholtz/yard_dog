@@ -44,6 +44,12 @@ enum Command {
         #[arg(long)]
         dest: Option<String>,
     },
+    /// List the compose stacks discovered under a root directory.
+    Stacks {
+        /// Root directory to scan (each stack is a subdirectory with a compose file).
+        #[arg(long)]
+        root: String,
+    },
     /// Verify a backup's integrity against its recorded manifest.
     Verify {
         /// Backup destination directory (must contain manifest.json).
@@ -72,6 +78,7 @@ fn main() {
             run,
             dest,
         } => run_backup(&file, plan, run, dest.as_deref()),
+        Command::Stacks { root } => run_stacks(&root),
         Command::Verify { dest } => run_verify(&dest),
         Command::Prune { dest, keep } => run_prune(&dest, keep),
     };
@@ -169,6 +176,18 @@ fn run_backup(file: &str, plan: bool, run: bool, dest: Option<&str>) -> Result<(
         print!("{}", yarddog::backup::render_plan(&backup_plan));
     } else {
         println!("Nothing to do — pass --plan to preview or --run --dest DIR to execute.");
+    }
+    Ok(())
+}
+
+fn run_stacks(root: &str) -> Result<(), String> {
+    let stacks = yarddog::stacks::discover_stacks(std::path::Path::new(root))
+        .map_err(|e| format!("scanning {root}: {e}"))?;
+    if stacks.is_empty() {
+        println!("no compose stacks found under {root}");
+    }
+    for s in &stacks {
+        println!("{}\t{}", s.name, s.compose_path.display());
     }
     Ok(())
 }
