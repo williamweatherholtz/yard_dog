@@ -58,6 +58,28 @@ fn valid_event(ev: &str) -> bool {
     matches!(ev, "activate" | "deprecate" | "archive" | "restore")
 }
 
+/// Whether a mutating (POST) request may proceed — the anti-CSRF gate. Requires
+/// `Content-Type: application/json` (a non-"simple" type, so a cross-origin POST
+/// triggers a CORS preflight the server never allows), and refuses any request
+/// carrying an `Origin` that is not loopback. Together with the loopback bind and
+/// Host allowlist this blocks a visited page from driving actions on the host.
+pub fn mutation_allowed(content_type: Option<&str>, origin: Option<&str>) -> bool {
+    let ct_ok = content_type
+        .map(|c| c.trim().to_ascii_lowercase().starts_with("application/json"))
+        .unwrap_or(false);
+    if !ct_ok {
+        return false;
+    }
+    match origin {
+        None => true,
+        Some(o) => {
+            // Origin is "scheme://host[:port]"; check the host is loopback.
+            let host = o.split("://").nth(1).unwrap_or(o);
+            host_is_loopback(host)
+        }
+    }
+}
+
 // ---- JSON read views (pure over the library) ---------------------------------
 
 fn json_escape(s: &str) -> String {
@@ -267,10 +289,26 @@ pub fn serve(port: u16, root: &Path) -> io::Result<()> {
             (Method::Get, "/api/drift") => docker_read(&root, &query, "drift"),
             (Method::Get, "/api/updates") => docker_read(&root, &query, "updates"),
             (Method::Post, p) if p.starts_with("/api/") => {
-                let mut body = String::new();
-                let _ = request.as_reader().read_to_string(&mut body);
-                let (status, json) = handle_action(&root, p, &body);
-                json_response(status, json)
+                // Anti-CSRF: require an application/json body and a loopback (or
+                // absent) Origin, so a visited page cannot drive actions here.
+                // Read the headers into owned values before borrowing the body.
+                let mut content_type = None;
+                let mut origin = None;
+                for h in request.headers() {
+                    if h.field.equiv("Content-Type") {
+                        content_type = Some(h.value.as_str().to_string());
+                    } else if h.field.equiv("Origin") {
+                        origin = Some(h.value.as_str().to_string());
+                    }
+                }
+                if !mutation_allowed(content_type.as_deref(), origin.as_deref()) {
+                    json_response(415, "{\"error\":\"mutations require application/json from a loopback origin\"}".into())
+                } else {
+                    let mut body = String::new();
+                    let _ = request.as_reader().read_to_string(&mut body);
+                    let (status, json) = handle_action(&root, p, &body);
+                    json_response(status, json)
+                }
             }
             // A mutating verb reaching a GET-only route (or vice versa).
             (_, p) if p.starts_with("/api/") => json_response(405, "{\"error\":\"method not allowed\"}".into()),
@@ -361,6 +399,20 @@ mod tests {
         }
         assert!(!valid_event("rm -rf"));
         assert!(!valid_event(""));
+    }
+
+    #[test]
+    fn mutation_gate_requires_json_and_loopback_origin() {
+        // a same-origin JSON request from the UI is allowed
+        assert!(mutation_allowed(Some("application/json"), Some("http://127.0.0.1:8770")));
+        assert!(mutation_allowed(Some("application/json; charset=utf-8"), None));
+        assert!(mutation_allowed(Some("application/json"), Some("http://localhost:8770")));
+        // a drive-by "simple" cross-site POST (text/plain) is refused
+        assert!(!mutation_allowed(Some("text/plain"), None));
+        assert!(!mutation_allowed(Some("text/plain;charset=UTF-8"), Some("https://evil.com")));
+        assert!(!mutation_allowed(None, None));
+        // JSON but from a non-loopback Origin is refused
+        assert!(!mutation_allowed(Some("application/json"), Some("https://evil.com")));
     }
 
     #[test]
