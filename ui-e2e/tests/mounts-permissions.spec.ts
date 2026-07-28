@@ -14,14 +14,25 @@ test('mounts tab types each mount and reports host-bind existence', async ({ pag
   await expect(existing.locator('.type.host-bind')).toBeVisible();
   await expect(existing.locator('.chip.ok', { hasText: 'exists' })).toBeVisible();
 
+  // the missing bind is LABELED with the specific problem, not just "missing".
   const missing = page.locator('#tabbody table tr', { hasText: '/data' });
-  await expect(missing.locator('.chip.bad', { hasText: 'missing' })).toBeVisible();
+  await expect(missing.locator('.chip.bad', { hasText: 'Missing directory' })).toBeVisible();
+  await expect(missing.locator('.auto')).toBeVisible(); // marked auto-fixable
 });
 
-test('a missing host-bind offers an inline fix (no alert popup)', async ({ page }) => {
+test('directory mitigation: a labeled issue + a one-click Apply fixes action', async ({ page }) => {
   await openStack(page, 'web');
   await openTab(page, 'Mounts');
-  await page.locator('#tabbody table tr', { hasText: '/data' }).getByRole('button', { name: 'Fix…' }).click();
+  // the summary surfaces the path-issue count and the apply-all mitigation.
+  await expect(page.locator('#tabbody')).toContainText(/path issue/);
+  await expect(page.getByRole('button', { name: /Apply fixes/ })).toBeVisible();
+});
+
+test('a missing host-bind opens an inline details/fix panel (no popup)', async ({ page }) => {
+  await openStack(page, 'web');
+  await openTab(page, 'Mounts');
+  await page.locator('#tabbody table tr', { hasText: '/data' }).getByRole('button', { name: 'Details…' }).click();
+  await expect(page.locator('tr.fixr')).toContainText('Missing directory');
   await expect(page.locator('tr.fixr')).toContainText('Suggested fix');
   await page.getByRole('button', { name: 'Close' }).click();
   await expect(page.locator('tr.fixr')).toHaveCount(0);

@@ -139,6 +139,7 @@
   .chip.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 13%,transparent);border-color:transparent;}
   .chip.bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,transparent);border-color:transparent;}
   .chip.dim{color:var(--muted);}
+  .chip .auto{opacity:.72;font-weight:600;}
 
   .issue{display:flex;gap:11px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:7px;background:var(--panel);}
   .issue .sev{font:700 10px/1 var(--mono);text-transform:uppercase;letter-spacing:.04em;padding:4px 6px;border-radius:5px;flex:none;margin-top:1px;}
@@ -403,28 +404,45 @@ async function saveCompose(deploy){logLine("cmd","▶ save"+(deploy?" & deploy":
   drafts[current]=$("#editor").value;logLine("ok","✓ saved (snapshot "+((data.sha||"").slice(0,8))+")");toast("ok","Saved");
   if(deploy)await doAct("/api/deploy",{compose:current},"deploy");loadStacks();}
 
-// ---- Mounts (the connections/interfaces of the stack) ----
+// ---- Mounts: connections + directory intelligence (typing, existence, mitigation) ----
+const ISSUE_CLS={missing:"bad",typemismatch:"warn",ownership:"warn"};
 async function renderMounts(){const b=$("#tabbody");b.append(el("p","muted","Reading connections…"));
   const {data}=await api("/api/mounts?compose="+enc(current));b.innerHTML="";
-  b.append(el("p","muted","How each service connects to the outside — host binds, named/anonymous volumes, and networks — with type and existence."));
+  b.append(el("p","muted","How each service connects to the outside — host binds, named/anonymous volumes, and networks — typed, with directory existence and labeled problems."));
   const items=data.items||[];
   if(!items.length){b.append(el("p","muted","No mounts declared in this stack."));return;}
-  const tbl=el("table");const hr=el("tr");["Service","Target","Source","Type","Exists","Fix"].forEach(h=>hr.append(el("th",null,h)));tbl.append(hr);
+  const allIssues=items.flatMap(m=>m.issues||[]);const fixable=allIssues.filter(i=>i.fixable).length;
+  // Summary + one-click mitigation.
+  const sum=el("div","bar");sum.style.margin="4px 0 14px";
+  sum.append(chip(allIssues.length?"warn":"ok",items.length+" connection"+(items.length===1?"":"s")));
+  if(allIssues.length)sum.append(chip("bad",allIssues.length+" path issue"+(allIssues.length===1?"":"s")));
+  else sum.append(chip("ok","no path issues"));
+  if(fixable>0){const bt=el("button","btn primary sm","Apply fixes ("+fixable+")");
+    bt.onclick=()=>confirmAct("Apply automatic directory mitigations? Creates missing directories owned by the container user and corrects ownership. Type mismatches are left for you to resolve.","/api/fix",{compose:current},"fix path issues").then(()=>renderShell());
+    sum.append(bt);sum.append(el("span","muted","creates missing dirs + fixes ownership"));}
+  b.append(sum);
+  const tbl=el("table");const hr=el("tr");["Service","Target","Source","Type","Status","Details"].forEach(h=>hr.append(el("th",null,h)));tbl.append(hr);
   for(const m of items){const tr=el("tr");
     tr.append(el("td",null,m.service));tr.append(el("td","m",m.target));tr.append(el("td","m",m.source||"—"));
     const kd=el("td");kd.append(el("span","type "+m.type,m.type));tr.append(kd);
-    const ex=el("td");if(m.type!=="host-bind"||m.exists===null)ex.append(el("span","chip dim","n/a"));else ex.append(m.exists?chip("ok","exists"):chip("bad","missing"));tr.append(ex);
-    const fx=el("td");if(m.remediations&&m.remediations.length){const bt=el("button","btn sm","Fix…");bt.onclick=()=>openFix(tr,m);fx.append(bt);}else fx.append(el("span","dim","—"));tr.append(fx);
+    const st=el("td");
+    if(m.issues&&m.issues.length){for(const i of m.issues){const c=chip(ISSUE_CLS[i.kind]||"warn",i.label,i.message);if(i.fixable)c.append(el("span","auto"," · auto-fix"));st.append(c);}}
+    else if(m.type!=="host-bind"||m.exists===null)st.append(el("span","chip dim","n/a"));
+    else st.append(chip("ok","exists"));
+    tr.append(st);
+    const fx=el("td");if((m.issues&&m.issues.length)||(m.remediations&&m.remediations.length)){const bt=el("button","btn sm","Details…");bt.onclick=()=>openFix(tr,m);fx.append(bt);}else fx.append(el("span","dim","—"));tr.append(fx);
     tbl.append(tr);}
   b.append(tbl);}
-function openFix(row,m){if(row.nextSibling&&row.nextSibling.classList&&row.nextSibling.classList.contains("fixr"))return;
-  const r=m.remediations[0];const tr=el("tr","fixr");const td=el("td");td.colSpan=6;
+function openFix(row,m){if(row.nextSibling&&row.nextSibling.classList&&row.nextSibling.classList.contains("fixr")){row.nextSibling.remove();return;}
+  const tr=el("tr","fixr");const td=el("td");td.colSpan=6;
   const box=el("div","form");box.style.cssText="margin:6px 0;max-width:none;box-shadow:none;";
-  box.append(el("div","eyebrow","Suggested fix"));box.append(el("div",null,r.summary));box.lastChild.style.margin="6px 0 10px";
-  if(r.command){const pre=el("div","preview");pre.textContent=r.command;box.append(pre);
-    const bar=el("div","bar");bar.style.marginTop="10px";const cp=el("button","btn sm","Copy command");
-    cp.onclick=()=>{navigator.clipboard.writeText(r.command);toast("ok","Copied");};const cx=el("button","btn sm","Close");cx.onclick=()=>tr.remove();
-    bar.append(cp);bar.append(cx);box.append(bar);}else{const cx=el("button","btn sm","Close");cx.onclick=()=>tr.remove();box.append(cx);}
+  // Label WHAT is wrong, then HOW to fix it.
+  for(const i of (m.issues||[])){const row2=el("div");row2.style.margin="0 0 8px";
+    row2.append(chip(ISSUE_CLS[i.kind]||"warn",i.label));row2.append(el("span",null," "+i.message));box.append(row2);}
+  for(const r of (m.remediations||[])){box.append(el("div","eyebrow","Suggested fix"));box.append(el("div",null,r.summary));box.lastChild.style.margin="6px 0 8px";
+    if(r.command){const pre=el("div","preview");pre.textContent=r.command;box.append(pre);
+      const cp=el("button","btn sm","Copy command");cp.style.marginTop="8px";cp.onclick=()=>{navigator.clipboard.writeText(r.command);toast("ok","Copied");};box.append(cp);}}
+  const cx=el("button","btn sm","Close");cx.style.marginTop="10px";cx.onclick=()=>tr.remove();box.append(cx);
   td.append(box);tr.append(td);row.after(tr);}
 
 // ---- Permissions / compliance ----

@@ -178,6 +178,8 @@ fn mounts_json(root: &Path, rel: &str) -> Option<String> {
                 Some(e) => e.exists.to_string(),
                 None => "null".to_string(),
             };
+            let expected = ids.get(&m.service).copied();
+            let issue_objs: Vec<String> = m.issues.iter().map(|i| issue_json(i, expected)).collect();
             let rems: Vec<String> = m
                 .remediations
                 .iter()
@@ -190,18 +192,52 @@ fn mounts_json(root: &Path, rel: &str) -> Option<String> {
                 })
                 .collect();
             format!(
-                "{{\"service\":{},\"target\":{},\"source\":{},\"type\":\"{}\",\"exists\":{},\"issues\":{},\"remediations\":[{}]}}",
+                "{{\"service\":{},\"target\":{},\"source\":{},\"type\":\"{}\",\"exists\":{},\"issues\":[{}],\"remediations\":[{}]}}",
                 json_escape(&m.service),
                 json_escape(&m.target),
                 m.source.as_deref().map(json_escape).unwrap_or_else(|| "null".into()),
                 mount_type_str(m.mount_type),
                 exists,
-                m.issues.len(),
+                issue_objs.join(","),
                 rems.join(",")
             )
         })
         .collect();
     Some(format!("{{\"items\":[{}]}}", items.join(",")))
+}
+
+/// Serialize one detected path issue with a human label and whether `yd fix` can
+/// apply it automatically (create the missing dir / fix ownership; a type
+/// mismatch is operator-decided and reports `fixable:false`).
+fn issue_json(issue: &Issue, expected: Option<(u32, u32)>) -> String {
+    let fixable = !crate::apply::actions_for(issue, expected).is_empty();
+    let (kind, label, message) = match issue {
+        Issue::MissingPath { path } => (
+            "missing",
+            "Missing directory".to_string(),
+            format!("Host path {path} does not exist yet"),
+        ),
+        Issue::TypeMismatch { path, expected_dir, .. } => (
+            "typemismatch",
+            "Type mismatch".to_string(),
+            format!(
+                "{path} is the wrong kind — the mount expects a {}",
+                if *expected_dir { "directory" } else { "file" }
+            ),
+        ),
+        Issue::Ownership { path, .. } => (
+            "ownership",
+            "Ownership".to_string(),
+            format!("{path} is not owned by the container user"),
+        ),
+    };
+    format!(
+        "{{\"kind\":\"{}\",\"label\":{},\"message\":{},\"fixable\":{}}}",
+        kind,
+        json_escape(&label),
+        json_escape(&message),
+        fixable
+    )
 }
 
 /// `GET /api/permissions?compose=REL` — security lens + ownership => compliance.
@@ -491,6 +527,13 @@ fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
             let Some(rel) = field(&v, "compose") else { return bad("compose required") };
             let Some(abs) = compose_abs(rel) else { return bad("path outside root") };
             (200, run_tool(Path::new("docker"), &["compose".into(), "-f".into(), abs, "down".into()]))
+        }
+        // Apply the automatic directory mitigations (create missing dirs with the
+        // container's owner; fix ownership). Explicit-consent only, via `yd fix`.
+        "/api/fix" => {
+            let Some(rel) = field(&v, "compose") else { return bad("compose required") };
+            let Some(abs) = compose_abs(rel) else { return bad("path outside root") };
+            (200, run_tool(&yd, &["fix".into(), abs, "--yes".into()]))
         }
         "/api/upgrade" => {
             let (Some(rel), Some(service), Some(image)) = (field(&v, "compose"), field(&v, "service"), field(&v, "image")) else {
