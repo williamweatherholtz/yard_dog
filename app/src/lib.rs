@@ -27,6 +27,7 @@ pub mod retention;
 pub mod selfupdate;
 pub mod stacks;
 pub mod stats;
+pub mod term;
 pub mod transport;
 pub mod updates;
 pub mod upgrade;

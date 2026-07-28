@@ -172,7 +172,9 @@ editor with **live** guardrail feedback as you type; Save snapshots to git, Save
 deploy runs the guarded path), **Mounts** (how each service connects to the outside —
 host binds, named/anonymous volumes, networks — typed with existence), **Permissions**
 (the security/compliance lens), **History** (git timeline with a unified **diff** and
-one-click **restore**), **Backups**, and **Logs**.
+one-click **restore**), **Backups**, and **Terminal** (live **logs-follow** and a
+full **interactive PTY shell** into any service — top, vi, and interactive prompts
+all work, via a bundled xterm.js over the same loopback server).
 
 Every action runs through the same guarded path (guardrails → backup → health-gate →
 rollback). Data entry is **fully in-page** — no browser popups: new stacks, image

@@ -246,7 +246,7 @@ const $=(s,r=document)=>r.querySelector(s);
 const el=(t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e;};
 const enc=encodeURIComponent;
 let stacks=[],current=null,tab="overview",detail=null,drafts={},consoleBuf=[];
-const TABS=[["overview","Overview"],["compose","Compose"],["mounts","Mounts"],["permissions","Permissions"],["history","History"],["backups","Backups"],["logs","Logs"]];
+const TABS=[["overview","Overview"],["compose","Compose"],["mounts","Mounts"],["permissions","Permissions"],["history","History"],["backups","Backups"],["terminal","Terminal"]];
 
 // ---- theme (persisted) ----
 (function(){const s=localStorage.getItem("yd-theme");if(s)document.documentElement.setAttribute("data-theme",s);})();
@@ -317,7 +317,8 @@ function renderShell(){const m=$("#main");m.innerHTML="";
   for(const [id,label] of TABS){const t=el("button","tab"+(tab===id?" active":""),label);t.onclick=()=>{tab=id;renderShell();};tabs.append(t);}
   m.append(tabs);
   const body=el("div");body.id="tabbody";m.append(body);
-  ({overview:renderOverview,compose:renderCompose,mounts:renderMounts,permissions:renderPermissions,history:renderHistory,backups:renderBackups,logs:renderLogs}[tab])();
+  closeTerm(); // tear down any live terminal when the view re-renders
+  ({overview:renderOverview,compose:renderCompose,mounts:renderMounts,permissions:renderPermissions,history:renderHistory,backups:renderBackups,terminal:renderTerminal}[tab])();
 }
 
 // ---- Overview ----
@@ -466,18 +467,74 @@ async function renderBackups(){const b=$("#tabbody");
     tbl.append(tr);}
   b.append(tbl);}
 
-// ---- Logs ----
-async function renderLogs(){const b=$("#tabbody");
-  const bar=el("div","bar");const rf=el("button","btn sm","Refresh");rf.onclick=()=>loadLogs();bar.append(rf);bar.append(el("span","muted","last 200 lines"));b.append(bar);
-  const pre=el("pre","diff");pre.id="logout";pre.append(el("span","dim","Loading…"));b.append(pre);loadLogs();}
-async function loadLogs(){const pre=$("#logout");if(!pre)return;pre.innerHTML="Loading…";
-  const {data}=await api("/api/logs?compose="+enc(current)+"&tail=200");pre.innerHTML="";
-  const out=((data.stdout||"")+(data.stderr||"")).trim();pre.append(el("span",out?"":"dim",out||"(no output — is the stack running?)"));}
+// ---- Terminal (live logs follow + interactive PTY shell) ----
+let activeTerm=null, xtermReady=null;
+function ensureXterm(){ if(xtermReady)return xtermReady;
+  xtermReady=new Promise((res,rej)=>{
+    const css=document.createElement("link");css.rel="stylesheet";css.href="/assets/xterm.css";document.head.append(css);
+    const s1=document.createElement("script");s1.src="/assets/xterm.js";
+    s1.onload=()=>{const s2=document.createElement("script");s2.src="/assets/addon-fit.js";s2.onload=res;s2.onerror=rej;document.head.append(s2);};
+    s1.onerror=rej;document.head.append(s1);
+  });return xtermReady;}
+function b64enc(str){return btoa(String.fromCharCode(...new TextEncoder().encode(str)));}
+function b64bytes(b64){return b64?Uint8Array.from(atob(b64),c=>c.charCodeAt(0)):new Uint8Array();}
+function closeTerm(){ if(!activeTerm)return; const a=activeTerm; activeTerm=null; a.stop=true;
+  try{ if(a.ro)a.ro.disconnect(); }catch{} try{ if(a.term)a.term.dispose(); }catch{}
+  if(a.session)post("/api/term/close",{session:a.session}); }
+
+async function renderTerminal(){const b=$("#tabbody");const forC=current;
+  const bar=el("div","bar");
+  const logsBtn=el("button","btn sm primary","Logs (follow)");
+  const shellBtn=el("button","btn sm","Shell");
+  const sel=el("select");sel.className="mono";sel.style.cssText="font:12px/1 var(--mono);padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--sunken);color:var(--ink);display:none;";
+  for(const s of (detail.services||[])){const o=el("option",null,s.name);o.value=s.name;sel.append(o);}
+  const dot=el("span","sig");const stat=el("span","muted","");
+  bar.append(logsBtn);bar.append(shellBtn);bar.append(sel);bar.append(dot);bar.append(stat);b.append(bar);
+  b.append(el("p","muted","Live output from this stack. Switch to Shell to open an interactive terminal inside a service (top, vi, and interactive prompts all work)."));
+  const host=el("div");host.id="termhost";host.style.cssText="height:60vh;min-height:300px;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:#0b0e12;padding:6px 8px;";b.append(host);
+
+  // Handlers are wired up SYNCHRONOUSLY (before any await) so a Shell/Logs click
+  // during the one-time xterm load is never lost; start() awaits xterm itself.
+  let mode="logs";
+  function setMode(m){mode=m;const shell=m==="shell";logsBtn.className="btn sm"+(shell?"":" primary");shellBtn.className="btn sm"+(shell?" primary":"");sel.style.display=shell?"":"none";start();}
+  logsBtn.onclick=()=>setMode("logs");shellBtn.onclick=()=>setMode("shell");sel.onchange=()=>{if(mode==="shell")start();};
+
+  let startGen=0;
+  async function start(){
+    const myGen=++startGen;
+    closeTerm();host.innerHTML='<div class="muted" style="padding:10px">loading terminal…</div>';
+    await ensureXterm();
+    if(myGen!==startGen||current!==forC)return; // superseded or navigated away
+    host.innerHTML="";
+    const term=new Terminal({fontSize:12.5,fontFamily:'ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace',theme:{background:"#0b0e12",foreground:"#e7eaed"},cursorBlink:mode==="shell",convertEol:false,scrollback:5000});
+    const fit=new FitAddon.FitAddon();term.loadAddon(fit);term.open(host);try{fit.fit();}catch{}
+    const service=mode==="shell"?sel.value:"";
+    dot.className="sig warn";stat.textContent="connecting…";
+    const {data}=await post("/api/term/open",{compose:forC,mode,service,rows:term.rows,cols:term.cols});
+    if(myGen!==startGen){try{term.dispose();}catch{} return;} // superseded by a newer start()
+    if(!data.ok){dot.className="sig bad";stat.textContent="failed";term.write("\r\n\x1b[31m"+(data.error||"could not open session")+"\x1b[0m\r\n");return;}
+    const session=data.session;
+    if(myGen!==startGen){post("/api/term/close",{session});try{term.dispose();}catch{} return;}
+    const state={session,stop:false,term,fit};activeTerm=state;
+    dot.className="sig ok";stat.textContent=mode==="shell"?("shell · "+service):"following logs";
+    if(mode==="shell")term.onData(d=>{if(state.session)post("/api/term/input",{session:state.session,data:b64enc(d)});});
+    const ro=new ResizeObserver(()=>{try{fit.fit();post("/api/term/resize",{session:state.session,rows:term.rows,cols:term.cols});}catch{}});ro.observe(host);state.ro=ro;
+    (async function poll(){
+      while(!state.stop&&activeTerm===state){
+        let r;try{r=await api("/api/term/read?session="+enc(session));}catch{break;}
+        if(state.stop||activeTerm!==state)break;
+        if(r.data&&r.data.data)term.write(b64bytes(r.data.data));
+        if(r.data&&r.data.alive===false){term.write("\r\n\x1b[90m[session ended]\x1b[0m\r\n");dot.className="sig";stat.textContent="ended";break;}
+      }
+    })();
+  }
+  start();
+}
 
 // ---- All stacks (fleet) ----
 $("#nav-all").onclick=()=>renderAll();
 function setNav(id){["nav-all","nav-git"].forEach(n=>$("#"+n).classList.toggle("on",n===id));}
-async function renderAll(){current=null;setNav("nav-all");renderRail();await loadStacks();
+async function renderAll(){closeTerm();current=null;setNav("nav-all");renderRail();await loadStacks();
   const m=$("#main");m.innerHTML="";
   m.append(el("div","eyebrow","Fleet"));
   const h=el("div","dhead");h.append(el("h1",null,"All stacks"));m.append(h);
@@ -511,7 +568,7 @@ function fleetResults(r){const data=(r&&r.data)||{};for(const x of (data.results
 // ---- Git (proper connect form; no prompts) ----
 $("#nav-git").onclick=()=>renderGit();
 function updateGitSig(){api("/api/git").then(({data})=>{const s=$("#git-sig");s.className="sig "+(data&&data.remote?"ok":"");});}
-async function renderGit(){current=null;setNav("nav-git");renderRail();const m=$("#main");m.innerHTML="";
+async function renderGit(){closeTerm();current=null;setNav("nav-git");renderRail();const m=$("#main");m.innerHTML="";
   m.append(el("div","eyebrow","Config sync"));
   const h=el("div","dhead");h.append(el("h1",null,"Git remote"));m.append(h);
   const {data}=await api("/api/git");
@@ -548,7 +605,7 @@ async function doAct(path,body,label){logLine("cmd","▶ yd "+label);const {data
   loadStacks();}
 
 // ---- new stack (inline panel; no prompts, no kind) ----
-$("#newstack").onclick=()=>{current=null;setNav(null);renderRail();const m=$("#main");m.innerHTML="";
+$("#newstack").onclick=()=>{closeTerm();current=null;setNav(null);renderRail();const m=$("#main");m.innerHTML="";
   m.append(el("div","eyebrow","New stack"));const h=el("div","dhead");h.append(el("h1",null,"Create a stack"));m.append(h);
   const box=el("div","form");box.style.marginTop="14px";
   const f=el("div","field");f.append(el("label",null,"Name"));

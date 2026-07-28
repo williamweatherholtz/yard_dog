@@ -37,9 +37,13 @@ test('backups tab shows the empty recovery-point state', async ({ page }) => {
   await expect(page.locator('#tabbody')).toContainText(/No recovery points|recovery point/i);
 });
 
-test('logs tab renders an output panel', async ({ page }) => {
+test('terminal tab mounts an xterm terminal and toggles logs/shell', async ({ page }) => {
   await openStack(page, 'web');
-  await openTab(page, 'Logs');
-  await expect(page.getByRole('button', { name: /Refresh/ })).toBeVisible();
-  await expect(page.locator('#logout')).toBeVisible();
+  await openTab(page, 'Terminal');
+  await expect(page.locator('#termhost .xterm')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole('button', { name: 'Logs (follow)' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Shell' })).toBeVisible();
+  // shell mode reveals a per-service picker (interactive exec target).
+  await page.getByRole('button', { name: 'Shell' }).click();
+  await expect(page.locator('#tabbody select')).toBeVisible();
 });

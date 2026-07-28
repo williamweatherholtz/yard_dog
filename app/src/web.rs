@@ -13,7 +13,8 @@ use crate::classify::{MountType, NetworkProbe, VolumeInfo, VolumeInspector};
 use crate::drift::{self, DriftKind};
 use crate::lifecycle::LifecycleState;
 use crate::remediation::Issue;
-use crate::{compose, gitver, guardrails, hostfs, lifecycle, preflight, registry, report, stacks, stats, updates, verify, workload};
+use crate::{compose, gitver, guardrails, hostfs, lifecycle, preflight, registry, report, stacks, stats, term, updates, verify, workload};
+use base64::prelude::{Engine as _, BASE64_STANDARD};
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -648,6 +649,56 @@ fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
             Ok(out) => (200, format!("{{\"ok\":true,\"stdout\":{}}}", json_escape(&out))),
             Err(e) => (200, format!("{{\"ok\":false,\"stderr\":{}}}", json_escape(&e.to_string()))),
         },
+        // ---- interactive terminal (PTY) -------------------------------------
+        "/api/term/open" => {
+            let Some(rel) = field(&v, "compose") else { return bad("compose required") };
+            let Some(abs) = compose_abs(rel) else { return bad("path outside root") };
+            let mode = field(&v, "mode").unwrap_or("shell");
+            let rows = v.get("rows").and_then(|x| x.as_u64()).unwrap_or(24) as u16;
+            let cols = v.get("cols").and_then(|x| x.as_u64()).unwrap_or(80) as u16;
+            let mut argv = vec!["docker".to_string(), "compose".into(), "-f".into(), abs];
+            match mode {
+                "logs" => {
+                    argv.extend(["logs".into(), "-f".into(), "--no-color".into(), "--tail".into(), "200".into()]);
+                    if let Some(svc) = field(&v, "service") {
+                        if !svc.is_empty() {
+                            argv.push(svc.into());
+                        }
+                    }
+                }
+                _ => {
+                    let Some(svc) = field(&v, "service") else { return bad("service required for a shell") };
+                    argv.extend(["exec".into(), svc.into(), "sh".into()]);
+                }
+            }
+            match term::open(&argv, rows, cols) {
+                Ok(id) => (200, format!("{{\"ok\":true,\"session\":{}}}", json_escape(&id))),
+                Err(e) => (200, format!("{{\"ok\":false,\"error\":{}}}", json_escape(&e.to_string()))),
+            }
+        }
+        "/api/term/input" => {
+            let (Some(sid), Some(data)) = (field(&v, "session"), field(&v, "data")) else {
+                return bad("session, data required");
+            };
+            let bytes = BASE64_STANDARD.decode(data).unwrap_or_default();
+            match term::write(sid, &bytes) {
+                Ok(()) => (200, "{\"ok\":true}".into()),
+                Err(e) => (200, format!("{{\"ok\":false,\"error\":{}}}", json_escape(&e.to_string()))),
+            }
+        }
+        "/api/term/resize" => {
+            let Some(sid) = field(&v, "session") else { return bad("session required") };
+            let rows = v.get("rows").and_then(|x| x.as_u64()).unwrap_or(24) as u16;
+            let cols = v.get("cols").and_then(|x| x.as_u64()).unwrap_or(80) as u16;
+            let _ = term::resize(sid, rows, cols);
+            (200, "{\"ok\":true}".into())
+        }
+        "/api/term/close" => {
+            if let Some(sid) = field(&v, "session") {
+                term::close(sid);
+            }
+            (200, "{\"ok\":true}".into())
+        }
         _ => (404, "{\"error\":\"unknown action\"}".into()),
     }
 }
@@ -760,6 +811,20 @@ pub fn serve(host: &str, port: u16, root: &Path) -> io::Result<()> {
                     None => json_response(400, "{\"error\":\"compose required or outside root\"}".into()),
                 }
             }
+            // Interactive terminal output: long-poll drains buffered PTY bytes
+            // (base64) so the browser terminal can render them.
+            (Method::Get, "/api/term/read") => match query_param(&query, "session") {
+                Some(sid) => match term::read(&sid, 500) {
+                    Some((data, alive)) => json_response(200, format!("{{\"data\":\"{}\",\"alive\":{}}}", BASE64_STANDARD.encode(&data), alive)),
+                    None => json_response(200, "{\"data\":\"\",\"alive\":false}".into()),
+                },
+                None => json_response(400, "{\"error\":\"session required\"}".into()),
+            },
+            // Bundled terminal emulator (xterm.js) — served from the binary; the
+            // strict same-host model means no CDN.
+            (Method::Get, "/assets/xterm.js") => Response::from_string(include_str!("assets/xterm.js")).with_header(header("Content-Type", "application/javascript; charset=utf-8")),
+            (Method::Get, "/assets/xterm.css") => Response::from_string(include_str!("assets/xterm.css")).with_header(header("Content-Type", "text/css; charset=utf-8")),
+            (Method::Get, "/assets/addon-fit.js") => Response::from_string(include_str!("assets/addon-fit.js")).with_header(header("Content-Type", "application/javascript; charset=utf-8")),
             (Method::Post, p) if p.starts_with("/api/") => {
                 // Anti-CSRF: require an application/json body and a loopback (or
                 // absent) Origin, so a visited page cannot drive actions here.

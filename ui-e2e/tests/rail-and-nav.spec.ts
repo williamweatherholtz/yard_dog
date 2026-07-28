@@ -58,8 +58,8 @@ test('every detail tab renders its own content', async ({ page }) => {
   await openTab(page, 'Backups');
   await expect(page.locator('#tabbody')).toContainText(/recovery point|No recovery points/i);
 
-  await openTab(page, 'Logs');
-  await expect(page.locator('#logout')).toBeVisible();
+  await openTab(page, 'Terminal');
+  await expect(page.locator('#termhost .xterm')).toBeVisible({ timeout: 10_000 });
 });
 
 test('the console dock is present and clearable', async ({ page }) => {
