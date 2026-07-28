@@ -11,8 +11,9 @@
 # the host daemon resolves bind paths correctly). That's real host access; if you
 # don't need the UI, the host binary (`curl … | sh`) is the lower-exposure option.
 #
-# CHANGE THE PORT any time: set YD_PORT (below or in a .env file) and re-run
-# `docker compose up -d`. Set YD_ROOT to the directory that holds your stacks.
+# CHANGE THE PORT any time: set PORT (below or in a .env file) and re-run
+# `docker compose up -d`. Set ROOT to the directory that holds your stacks.
+# (Env is container-scoped, so no vendor prefix — see the note by `environment:`.)
 
 # A stable project name so `docker compose` groups/labels resources predictably
 # regardless of the directory this file lives in.
@@ -43,22 +44,25 @@ services:
         max-file: "3"
     # Give the server (and any open PTY sessions) a moment to exit cleanly.
     stop_grace_period: 30s
+    # Container-scoped config, so the names are unprefixed. NOTE: because these are
+    # plain names, an unrelated ROOT/PORT in your shell or .env would be substituted
+    # into the `${...}` below during `up` — set them here or in this project's .env.
     environment:
-      YD_ROOT: ${YD_ROOT:-/srv/stacks}
-      YD_PORT: ${YD_PORT:-8770}
-      YD_BIND: 0.0.0.0               # container-internal; published to loopback below
+      ROOT: ${ROOT:-/srv/stacks}
+      PORT: ${PORT:-8770}
+      BIND: 0.0.0.0                  # container-internal; published to loopback below
     ports:
       # SECURITY: keep the "127.0.0.1:" prefix — it is the ONLY access boundary for
       # this no-auth, socket-wired control plane. (The built-in Host allowlist is a
       # browser DNS-rebinding defense, not an access control.) Removing it — e.g.
       # "8770:8770" — exposes UNAUTHENTICATED HOST ROOT. For remote access, front it
       # with an authenticated reverse proxy / SSH tunnel instead of widening this.
-      - "127.0.0.1:${YD_PORT:-8770}:${YD_PORT:-8770}"
+      - "127.0.0.1:${PORT:-8770}:${PORT:-8770}"
     volumes:
       # 1) talk to the host Docker daemon
       - /var/run/docker.sock:/var/run/docker.sock
       # 2) your stacks dir, mounted at the SAME path so host bind paths resolve
-      - ${YD_ROOT:-/srv/stacks}:${YD_ROOT:-/srv/stacks}
+      - ${ROOT:-/srv/stacks}:${ROOT:-/srv/stacks}
 
     # ---- optional hardening (opt in AFTER testing on your host) ----------------
     # Cap memory so a runaway can't starve the host. yd is a lightweight Rust

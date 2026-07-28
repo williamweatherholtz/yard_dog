@@ -123,7 +123,7 @@ sudo dpkg -i yard-dog_*_arm64.deb        # or: sudo apt install ./yard-dog_*_arm
 sudo rpm -i yard-dog-*.aarch64.rpm
 ```
 The package installs `/usr/bin/yd` plus a **disabled** `yd.service`; to run the
-control plane as a service, set `YD_ROOT` in `/etc/yard-dog/yd.env` then
+control plane as a service, set `ROOT` in `/etc/yard-dog/yd.env` then
 `sudo systemctl enable --now yd`.
 
 **macOS (Homebrew, Apple Silicon):**
@@ -142,8 +142,8 @@ Once installed, `yd self-update --apply` keeps it current (also SHA256-verified)
 **Container (`docker compose up`)** — the frictionless on-ramp:
 ```sh
 # packaging/docker/docker-compose.yml
-YD_ROOT=/srv/stacks YD_PORT=8770 docker compose -f packaging/docker/docker-compose.yml up -d
-# → http://127.0.0.1:8770   (change the port any time via YD_PORT, then re-run `up -d`)
+ROOT=/srv/stacks PORT=8770 docker compose -f packaging/docker/docker-compose.yml up -d
+# → http://127.0.0.1:8770   (change the port any time via PORT, then re-run `up -d`)
 ```
 It **auto-runs** (`restart: unless-stopped` + an HTTP healthcheck) and the port is
 yours to set. It needs the Docker socket **and** your stacks dir mounted at the same

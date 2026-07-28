@@ -32,13 +32,15 @@ COPY --from=build /yd /usr/local/bin/yd
 # Do NOT change the publish to a non-loopback address (e.g. "8770:8770"); doing so
 # exposes UNAUTHENTICATED HOST ROOT to anything that can reach the port. For remote
 # access, front it with an authenticated reverse proxy or an SSH tunnel.
-ENV YD_ROOT=/srv/stacks \
-    YD_PORT=8770 \
-    YD_BIND=0.0.0.0
+# Config env (container-scoped, so no vendor prefix needed). The entrypoint bridges
+# these to `yd serve` flags; the binary itself takes --root/--port/--host.
+ENV ROOT=/srv/stacks \
+    PORT=8770 \
+    BIND=0.0.0.0
 EXPOSE 8770
 
 # Health = the control plane actually answers, not merely "process started".
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD wget -qO- "http://127.0.0.1:${YD_PORT}/" >/dev/null 2>&1 || exit 1
+  CMD wget -qO- "http://127.0.0.1:${PORT}/" >/dev/null 2>&1 || exit 1
 
-ENTRYPOINT ["/bin/sh", "-c", "exec yd serve --root \"$YD_ROOT\" --port \"$YD_PORT\" --host \"$YD_BIND\""]
+ENTRYPOINT ["/bin/sh", "-c", "exec yd serve --root \"$ROOT\" --port \"$PORT\" --host \"$BIND\""]

@@ -6,10 +6,10 @@ Wants=docker.service
 
 [Service]
 Type=simple
-# Edit /etc/yard-dog/yd.env to point YD_ROOT at your stacks directory, then:
+# Edit /etc/yard-dog/yd.env to point ROOT at your stacks directory, then:
 #   sudo systemctl enable --now yd
 EnvironmentFile=/etc/yard-dog/yd.env
-ExecStart=/usr/bin/yd serve --root ${YD_ROOT} --port ${YD_PORT}
+ExecStart=/usr/bin/yd serve --root ${ROOT} --port ${PORT}
 Restart=on-failure
 RestartSec=3
 # yd binds 127.0.0.1 only; expose it via your own SSH tunnel / reverse proxy.
