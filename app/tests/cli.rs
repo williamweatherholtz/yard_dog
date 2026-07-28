@@ -351,22 +351,7 @@ fn check_blocks_bad_compose_passes_clean() {
 }
 
 #[test]
-fn classify_labels_services_by_kind() {
-    let dir = tempfile::tempdir().unwrap();
-    let f = dir.path().join("c.yml");
-    std::fs::write(
-        &f,
-        "services:\n  db:\n    image: postgres:16\n  web:\n    image: nginx:1.27\n    ports:\n      - \"8080:80\"\n",
-    )
-    .unwrap();
-    let a = Command::cargo_bin("yd").unwrap().arg("classify").arg(f.to_str().unwrap()).assert().success();
-    let out = String::from_utf8_lossy(&a.get_output().stdout).to_string();
-    assert!(out.contains("db: datastore"), "got:\n{out}");
-    assert!(out.contains("web: web"), "got:\n{out}");
-}
-
-#[test]
-fn updates_lists_services_with_kind_and_action() {
+fn updates_lists_services_with_status_and_action() {
     let dir = tempfile::tempdir().unwrap();
     let f = dir.path().join("c.yml");
     std::fs::write(
@@ -378,7 +363,7 @@ fn updates_lists_services_with_kind_and_action() {
     let out = String::from_utf8_lossy(&a.get_output().stdout).to_string();
     assert!(out.contains("db"), "got:\n{out}");
     assert!(out.contains("web"), "got:\n{out}");
-    assert!(out.contains("kind=datastore"), "got:\n{out}");
+    assert!(out.contains("status=") && out.contains("action="), "got:\n{out}");
 }
 
 #[test]
@@ -410,7 +395,7 @@ fn new_instantiates_a_guardrail_clean_draft_stack() {
     let into = dir.path().to_str().unwrap();
     Command::cargo_bin("yd")
         .unwrap()
-        .args(["new", "--into", into, "--name", "immich", "--kind", "datastore"])
+        .args(["new", "--into", into, "--name", "immich"])
         .assert()
         .success();
     let compose = dir.path().join("immich").join("docker-compose.yml");

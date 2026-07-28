@@ -445,12 +445,10 @@ fn stack_detail_json(root: &Path, rel: &str) -> Option<String> {
     let services: Vec<String> = workload::parse_services(&yaml)
         .iter()
         .map(|s| {
-            let kind = workload::classify(s);
             format!(
-                "{{\"name\":{},\"image\":{},\"kind\":{}}}",
+                "{{\"name\":{},\"image\":{}}}",
                 json_escape(&s.name),
-                json_escape(s.image.as_deref().unwrap_or("")),
-                json_escape(kind.as_str())
+                json_escape(s.image.as_deref().unwrap_or(""))
             )
         })
         .collect();

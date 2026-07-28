@@ -55,15 +55,14 @@ match the target commit exactly, including removing files added afterwards.
 
 Run `yd <command> --help` for full flags. Grouped by what they touch:
 
-### Inspect & classify (read-only)
+### Inspect (read-only)
 | Command | Purpose |
 |---|---|
 | `yd inspect <compose>` | Classify every mount (host bind / named / anonymous / network) and report existence + remediation. |
 | `yd check <compose>` | Run the preventative policy guardrails over a compose file. |
 | `yd doctor <compose>` | One preflight verdict (READY / NOT READY) from guardrails + lifecycle, with a matching exit code. |
 | `yd serve [--root <dir>] [--port N] [--host <addr>]` | Serve the browser control plane over the stacks under `<dir>` (default `.`, port 8770). `--host` defaults to `127.0.0.1` (loopback); use `0.0.0.0` only inside a container that publishes to host loopback — the Host allowlist still refuses non-loopback requests. |
-| `yd classify <compose>` | Classify each service into a workload kind (datastore / web / worker / cron / proxy). |
-| `yd updates <compose>` | Show image-update status (real digest check against Docker Hub / GHCR) plus the kind-gated action per service. |
+| `yd updates <compose>` | Show image-update status (real digest check against Docker Hub / GHCR) plus the suggested action per service (a service with a persistent data mount is notify-only, never auto-applied). |
 | `yd drift <compose>` | Report drift between the declared compose and the running stack. |
 | `yd stacks --root <dir>` | List the compose stacks discovered under a root directory. |
 
@@ -94,7 +93,7 @@ Run `yd <command> --help` for full flags. Grouped by what they touch:
 ### Other
 | Command | Purpose |
 |---|---|
-| `yd new --into <dir> --name <n> --kind <k> [--service <s>]` | Instantiate a guardrail-clean starter stack for a workload kind (`datastore` / `web` / `worker` / `cron` / `proxy`), in the Draft lifecycle state. |
+| `yd new --into <dir> --name <n> [--service <s>]` | Instantiate a guardrail-clean starter stack (pinned image, healthcheck, restart, limit) in the Draft lifecycle state. |
 | `yd lifecycle --repo <dir> [--event <e>]` | Show or transition a stack's lifecycle state; `<e>` = `activate` / `deprecate` / `archive` / `restore`. |
 | `yd import <compose> --into <dir> [--name <n>]` | Import an existing compose stack into a managed stacks directory. |
 | `yd pin add --repo <dir> --service <s>` / `yd pin list --repo <dir>` | Pin services to hold their updates. |

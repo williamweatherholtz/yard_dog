@@ -27,12 +27,7 @@ enum Command {
         /// Path to the docker-compose file.
         file: String,
     },
-    /// Classify each service into a workload kind.
-    Classify {
-        /// Path to the docker-compose file.
-        file: String,
-    },
-    /// Show image-update status + the kind-gated action per service.
+    /// Show image-update status + the suggested action per service.
     Updates {
         /// Path to the docker-compose file.
         file: String,
@@ -192,15 +187,12 @@ enum Command {
         /// Path to the docker-compose file.
         file: String,
     },
-    /// Instantiate a new guardrail-clean starter stack from a workload kind.
+    /// Instantiate a new guardrail-clean starter stack.
     New {
         #[arg(long)]
         into: String,
         #[arg(long)]
         name: String,
-        /// datastore | web | worker | cron | proxy
-        #[arg(long)]
-        kind: String,
         /// Service name inside the compose (defaults to the stack name).
         #[arg(long)]
         service: Option<String>,
@@ -310,7 +302,6 @@ fn main() {
     let result = match cli.command {
         Command::Inspect { file } => run_inspect(&file),
         Command::Check { file } => run_check(&file),
-        Command::Classify { file } => run_classify(&file),
         Command::Updates { file } => run_updates(&file),
         Command::Drift { file } => run_drift(&file),
         Command::Fix { file, yes } => run_fix(&file, yes),
@@ -344,7 +335,7 @@ fn main() {
             yarddog::web::serve(&host, port, std::path::Path::new(&root)).map_err(|e| e.to_string())
         }
         Command::Doctor { file } => run_doctor(&file),
-        Command::New { into, name, kind, service } => run_new(&into, &name, &kind, service.as_deref()),
+        Command::New { into, name, service } => run_new(&into, &name, service.as_deref()),
         Command::Lifecycle { repo, event } => run_lifecycle(&repo, event.as_deref()),
     };
     if let Err(e) = result {
@@ -396,9 +387,8 @@ fn run_updates(file: &str) -> Result<(), String> {
     let plan = yarddog::updates::build_update_plan(&services, &running, &yarddog::registry::HttpRegistryClient);
     for item in &plan {
         println!(
-            "{}: kind={} status={:?} action={}",
+            "{}: status={:?} action={}",
             item.service,
-            item.kind.as_str(),
             item.status,
             item.action.as_str()
         );
@@ -431,23 +421,6 @@ fn run_drift(file: &str) -> Result<(), String> {
                 println!("  {svc}: {img}");
             }
         }
-    }
-    Ok(())
-}
-
-fn run_classify(file: &str) -> Result<(), String> {
-    let yaml = std::fs::read_to_string(file).map_err(|e| format!("reading {file}: {e}"))?;
-    for v in yarddog::workload::parse_services(&yaml) {
-        let kind = yarddog::workload::classify(&v);
-        print!("{}: {}", v.name, kind.as_str());
-        if let Some((authored, heuristic)) = yarddog::workload::disagreement(&v) {
-            print!(
-                "  (label says {}, heuristic says {})",
-                authored.as_str(),
-                heuristic.as_str()
-            );
-        }
-        println!();
     }
     Ok(())
 }
@@ -787,13 +760,11 @@ fn run_doctor(file: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn run_new(into: &str, name: &str, kind: &str, service: Option<&str>) -> Result<(), String> {
-    let k = yarddog::workload::WorkloadKind::parse(kind)
-        .ok_or_else(|| format!("unknown kind '{kind}' (datastore|web|worker|cron|proxy)"))?;
+fn run_new(into: &str, name: &str, service: Option<&str>) -> Result<(), String> {
     let service = service.unwrap_or(name);
-    let compose = yarddog::instantiate::instantiate(std::path::Path::new(into), name, k, service)
+    let compose = yarddog::instantiate::instantiate(std::path::Path::new(into), name, service)
         .map_err(|e| format!("instantiate failed: {e}"))?;
-    println!("created {} (kind={}, lifecycle=draft)", compose.display(), k.as_str());
+    println!("created {} (lifecycle=draft)", compose.display());
     Ok(())
 }
 

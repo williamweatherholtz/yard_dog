@@ -5,6 +5,7 @@ package YardDogRemoveKindDecision {
     private import EngineElement::*;
     private import EngineWork::*;
     private import EngineVerification::*;
+    private import EngineRelationships::*;
 
     part decRemoveWorkloadKind : Decision {
         :>> id = "c598ad7d-0d7b-405e-bab2-9ba80b7a7f88";
@@ -20,4 +21,10 @@ package YardDogRemoveKindDecision {
 
     verification decRemoveWorkloadKindAccept : Test { :>> id = "f984d75c-40f2-4740-aeb9-9fecd5e5af44"; :>> method = VerificationMethod::confirmation; :>> procedureText = "Human operator wweatherholtz selected 'Remove entirely' for the workload-kind question on 2026-07-27, accepting that kind is removed from the UI, the CLI (`yd new --kind`, `yd classify`), and the update-gating logic."; }
     part decRemoveWorkloadKindAcceptR1 : TestResult { :>> id = "fa521198-b613-4eb2-a03c-fe07a499d567"; :>> outcome = VerdictKind::pass; :>> judgedAt = "2026-07-27"; :>> judgedBy = "wweatherholtz"; }
+
+    // This scope-cut decision supersedes the two Needs the workload-kind feature served.
+    // The cautious-update value they carried is preserved, re-keyed off a persistent
+    // data mount (a concrete signal) rather than a classified "kind".
+    #Supersede dependency from decRemoveWorkloadKind to needWorkloadClassification;
+    #Supersede dependency from decRemoveWorkloadKind to needInstantiateFromKind;
 }
