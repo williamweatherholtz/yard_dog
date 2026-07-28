@@ -493,8 +493,12 @@ function ensureXterm(){ if(xtermReady)return xtermReady;
     const s1=document.createElement("script");s1.src="/assets/xterm.js";
     s1.onload=()=>{const s2=document.createElement("script");s2.src="/assets/addon-fit.js";s2.onload=res;s2.onerror=rej;document.head.append(s2);};
     s1.onerror=rej;document.head.append(s1);
-  });return xtermReady;}
-function b64enc(str){return btoa(String.fromCharCode(...new TextEncoder().encode(str)));}
+  }).catch(e=>{xtermReady=null;throw e;}); // don't cache a rejection — allow retry
+  return xtermReady;}
+// Chunked so a large shell paste can't blow String.fromCharCode's argument limit.
+function b64enc(str){const bytes=new TextEncoder().encode(str);let bin="";const CH=0x8000;
+  for(let i=0;i<bytes.length;i+=CH)bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+CH));
+  return btoa(bin);}
 function b64bytes(b64){return b64?Uint8Array.from(atob(b64),c=>c.charCodeAt(0)):new Uint8Array();}
 function closeTerm(){ if(!activeTerm)return; const a=activeTerm; activeTerm=null; a.stop=true;
   try{ if(a.ro)a.ro.disconnect(); }catch{} try{ if(a.term)a.term.dispose(); }catch{}
@@ -521,7 +525,10 @@ async function renderTerminal(){const b=$("#tabbody");const forC=current;
   async function start(){
     const myGen=++startGen;
     closeTerm();host.innerHTML='<div class="muted" style="padding:10px">loading terminal…</div>';
-    await ensureXterm();
+    try{ await ensureXterm(); }
+    catch{ if(myGen!==startGen||current!==forC)return;
+      dot.className="sig bad";stat.textContent="terminal failed to load";
+      host.innerHTML='<div class="muted" style="padding:12px">Could not load the terminal assets. Click Logs or Shell to retry.</div>';return; }
     if(myGen!==startGen||current!==forC)return; // superseded or navigated away
     host.innerHTML="";
     const term=new Terminal({fontSize:12.5,fontFamily:'ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace',theme:{background:"#0b0e12",foreground:"#e7eaed"},cursorBlink:mode==="shell",convertEol:false,scrollback:5000});
@@ -536,13 +543,21 @@ async function renderTerminal(){const b=$("#tabbody");const forC=current;
     const state={session,stop:false,term,fit};activeTerm=state;
     dot.className="sig ok";stat.textContent=mode==="shell"?("shell · "+service):"following logs";
     if(mode==="shell")term.onData(d=>{if(state.session)post("/api/term/input",{session:state.session,data:b64enc(d)});});
-    const ro=new ResizeObserver(()=>{try{fit.fit();post("/api/term/resize",{session:state.session,rows:term.rows,cols:term.cols});}catch{}});ro.observe(host);state.ro=ro;
+    const ro=new ResizeObserver(()=>{try{fit.fit();if(state.session)post("/api/term/resize",{session:state.session,rows:term.rows,cols:term.cols});}catch{}});ro.observe(host);state.ro=ro;
+    // Stop observing/typing to a finished or dropped session; keep the output visible.
+    const stopObserving=()=>{try{if(state.ro)state.ro.disconnect();}catch{}};
     (async function poll(){
       while(!state.stop&&activeTerm===state){
-        let r;try{r=await api("/api/term/read?session="+enc(session));}catch{break;}
+        let r;try{r=await api("/api/term/read?session="+enc(session));}catch{
+          // transport dropped — show it honestly (green-on-dead was the bug); the
+          // session may still be alive server-side and is reclaimed by reconnect or
+          // the idle sweeper.
+          dot.className="sig bad";stat.textContent="disconnected — click Logs or Shell to reconnect";stopObserving();break;
+        }
         if(state.stop||activeTerm!==state)break;
+        if(!r.ok){dot.className="sig bad";stat.textContent="disconnected — click Logs or Shell to reconnect";stopObserving();break;}
         if(r.data&&r.data.data)term.write(b64bytes(r.data.data));
-        if(r.data&&r.data.alive===false){term.write("\r\n\x1b[90m[session ended]\x1b[0m\r\n");dot.className="sig";stat.textContent="ended";break;}
+        if(r.data&&r.data.alive===false){term.write("\r\n\x1b[90m[session ended]\x1b[0m\r\n");dot.className="sig";stat.textContent="ended";state.session=null;stopObserving();break;}
       }
     })();
   }
@@ -611,7 +626,11 @@ async function doGit(path,body,label){logLine("cmd","▶ git "+label);const {dat
   if(data.error){logLine("bad","✗ "+data.error);toast("bad","Git "+label+" failed");return;}
   if(data.stdout&&data.stdout.trim())logLine("",data.stdout.trim());
   if(data.stderr&&data.stderr.trim())logLine("bad",data.stderr.trim());
-  logLine(data.ok?"ok":"bad",data.ok?"✓ done":"✗ failed");if(data.ok)toast("ok","Git "+label);updateGitSig();}
+  logLine(data.ok?"ok":"bad",data.ok?"✓ done":"✗ failed");if(data.ok)toast("ok","Git "+label);
+  // A pull rewrites on-disk compose files; drop cached drafts so the editor can't
+  // save stale content over the pulled changes.
+  if(data.ok&&label==="pull")drafts={};
+  updateGitSig();}
 
 // ---- actions ----
 async function confirmAct(msg,path,body,label,danger){if(!await askConfirm(msg,"Confirm",danger))return;return doAct(path,body,label);}

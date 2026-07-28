@@ -61,7 +61,7 @@ Run `yd <command> --help` for full flags. Grouped by what they touch:
 | `yd inspect <compose>` | Classify every mount (host bind / named / anonymous / network) and report existence + remediation. |
 | `yd check <compose>` | Run the preventative policy guardrails over a compose file. |
 | `yd doctor <compose>` | One preflight verdict (READY / NOT READY) from guardrails + lifecycle, with a matching exit code. |
-| `yd serve [--root <dir>] [--port N] [--host <addr>]` | Serve the browser control plane over the stacks under `<dir>` (default `.`, port 8770). `--host` defaults to `127.0.0.1` (loopback); use `0.0.0.0` only inside a container that publishes to host loopback — the Host allowlist still refuses non-loopback requests. |
+| `yd serve [--root <dir>] [--port N] [--host <addr>]` | Serve the browser control plane over the stacks under `<dir>` (default `.`, port 8770). `--host` defaults to `127.0.0.1` (loopback); use `0.0.0.0` only inside a container whose port is published to the host's loopback (`127.0.0.1:`) — that loopback publish is the access boundary, since this plane has no auth. |
 | `yd updates <compose>` | Show image-update status (real digest check against Docker Hub / GHCR) plus the suggested action per service (a service with a persistent data mount is notify-only, never auto-applied). |
 | `yd drift <compose>` | Report drift between the declared compose and the running stack. |
 | `yd stacks --root <dir>` | List the compose stacks discovered under a root directory. |
@@ -150,9 +150,12 @@ yours to set. It needs the Docker socket **and** your stacks dir mounted at the 
 path, because Yard Dog's path-intelligence and backup/restore read the host
 filesystem — that's real host access, so the **host binary above is the
 lower-exposure, full-feature path we recommend**; the container is the try-it/opt-in
-option. The UI is published to your machine's loopback only, and its Host allowlist
-still refuses any non-loopback request even though the container binds `0.0.0.0`
-internally. See [`packaging/docker/`](packaging/docker/) for the annotated compose.
+option. The UI is published to your machine's **loopback only** (`127.0.0.1:`),
+which is the sole access boundary for this no-auth control plane — the Host
+allowlist is only a browser DNS-rebinding defense, not access control, so **don't
+widen the publish to a non-loopback address** (that would expose unauthenticated
+host root via the socket mount). See [`packaging/docker/`](packaging/docker/) for
+the annotated, security-commented compose.
 
 ## Browser control plane
 

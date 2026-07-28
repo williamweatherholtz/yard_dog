@@ -22,9 +22,16 @@ COPY --from=build /yd /usr/local/bin/yd
 # features read the host filesystem, so the stacks dir is mounted at the SAME path
 # inside the container (see docker-compose.yml) — that way any path yd hands to the
 # host daemon resolves identically on the host. `yd serve` binds 0.0.0.0 INSIDE the
-# container; the compose file publishes that port to the host's loopback only, and
-# the built-in Host allowlist still refuses every non-loopback Host header, so this
-# bind never opens LAN access on its own.
+# container because Docker port-publishing forwards to the container's interface,
+# not its loopback.
+#
+# SECURITY — read this: the ONLY thing confining this no-auth, socket-wired
+# (host-root-equivalent) control plane is the `127.0.0.1:` prefix on the publish in
+# docker-compose.yml. The built-in Host allowlist is a *browser DNS-rebinding*
+# defense, NOT an access control — any direct client can just send `Host: 127.0.0.1`.
+# Do NOT change the publish to a non-loopback address (e.g. "8770:8770"); doing so
+# exposes UNAUTHENTICATED HOST ROOT to anything that can reach the port. For remote
+# access, front it with an authenticated reverse proxy or an SSH tunnel.
 ENV YD_ROOT=/srv/stacks \
     YD_PORT=8770 \
     YD_BIND=0.0.0.0

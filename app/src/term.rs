@@ -5,13 +5,26 @@
 //! (top, vi) and live log follow both work. Output is buffered and drained by a
 //! long-poll read; input and resize are ordinary requests. This keeps the whole
 //! thing on the existing request/response server — no websockets.
+//!
+//! Lifecycle is bounded so an abandoned browser tab can't leak forever: the output
+//! buffer is capped (drop-oldest), the number of concurrent sessions is capped, and
+//! a background sweeper closes sessions that have not been read from recently
+//! (killing AND reaping the child). Locks are poison-resilient so one panicking
+//! session thread cannot cascade into the server.
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant};
+
+/// Cap on buffered-but-undrained output per session (drop-oldest beyond this).
+const MAX_BUFFER: usize = 256 * 1024;
+/// Cap on concurrent sessions (a crude anti-exhaustion bound).
+const MAX_SESSIONS: usize = 24;
+/// Sessions not read from for this long are swept closed.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 struct Session {
     writer: Mutex<Box<dyn Write + Send>>,
@@ -20,6 +33,12 @@ struct Session {
     out: Mutex<Vec<u8>>,
     cv: Condvar,
     alive: AtomicBool,
+    last_touch: Mutex<Instant>,
+}
+
+/// Lock a mutex, recovering the guard even if a holder panicked (no cascade).
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 fn registry() -> &'static Mutex<HashMap<String, Arc<Session>>> {
@@ -45,8 +64,6 @@ fn resolve_program(name: &str) -> String {
         return name.to_string();
     }
     let path_var = std::env::var_os("PATH").unwrap_or_default();
-    // On Windows try the executable extensions FIRST (docker.exe), then the bare
-    // name last — a bare `docker` wrapper file is not a valid Win32 executable.
     let exts: Vec<String> = if cfg!(windows) {
         let mut e: Vec<String> = std::env::var("PATHEXT")
             .unwrap_or_else(|_| ".EXE;.CMD;.BAT".into())
@@ -70,10 +87,38 @@ fn resolve_program(name: &str) -> String {
     name.to_string()
 }
 
+/// Background sweeper: every 30s, close sessions idle past IDLE_TIMEOUT. Started
+/// once, on the first `open`.
+fn ensure_sweeper() {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    STARTED.get_or_init(|| {
+        std::thread::spawn(|| loop {
+            std::thread::sleep(Duration::from_secs(30));
+            let stale: Vec<String> = {
+                let reg = lock(registry());
+                reg.iter()
+                    .filter(|(_, s)| lock(&s.last_touch).elapsed() > IDLE_TIMEOUT)
+                    .map(|(id, _)| id.clone())
+                    .collect()
+            };
+            for id in stale {
+                close(&id);
+            }
+        });
+    });
+}
+
 /// Open a PTY session running `argv`. Returns an opaque session id.
 pub fn open(argv: &[String], rows: u16, cols: u16) -> io::Result<String> {
     if argv.is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty command"));
+    }
+    ensure_sweeper();
+    if lock(registry()).len() >= MAX_SESSIONS {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "too many terminal sessions open — close one and retry",
+        ));
     }
     let pair = native_pty_system()
         .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
@@ -96,11 +141,12 @@ pub fn open(argv: &[String], rows: u16, cols: u16) -> io::Result<String> {
         out: Mutex::new(Vec::new()),
         cv: Condvar::new(),
         alive: AtomicBool::new(true),
+        last_touch: Mutex::new(Instant::now()),
     });
     let id = next_id();
-    registry().lock().unwrap().insert(id.clone(), sess.clone());
+    lock(registry()).insert(id.clone(), sess.clone());
 
-    // Reader thread: pump PTY output into the session buffer, waking pollers.
+    // Reader thread: pump PTY output into the session buffer (capped), waking pollers.
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
@@ -108,8 +154,13 @@ pub fn open(argv: &[String], rows: u16, cols: u16) -> io::Result<String> {
                 Ok(0) => break,
                 Ok(n) => {
                     {
-                        let mut out = sess.out.lock().unwrap();
+                        let mut out = lock(&sess.out);
                         out.extend_from_slice(&buf[..n]);
+                        if out.len() > MAX_BUFFER {
+                            // Drop oldest so an un-polled session can't grow without bound.
+                            let drop = out.len() - MAX_BUFFER;
+                            out.drain(0..drop);
+                        }
                     }
                     sess.cv.notify_all();
                 }
@@ -125,13 +176,14 @@ pub fn open(argv: &[String], rows: u16, cols: u16) -> io::Result<String> {
 /// Drain any buffered output, blocking up to `timeout_ms` for the first bytes.
 /// Returns `(bytes, alive)`; `None` if the session id is unknown.
 pub fn read(id: &str, timeout_ms: u64) -> Option<(Vec<u8>, bool)> {
-    let sess = registry().lock().unwrap().get(id)?.clone();
-    let mut out = sess.out.lock().unwrap();
+    let sess = lock(registry()).get(id)?.clone();
+    *lock(&sess.last_touch) = Instant::now();
+    let mut out = lock(&sess.out);
     if out.is_empty() && sess.alive.load(Ordering::SeqCst) {
         let (g, _) = sess
             .cv
             .wait_timeout(out, Duration::from_millis(timeout_ms))
-            .unwrap();
+            .unwrap_or_else(|e| e.into_inner());
         out = g;
     }
     let data = std::mem::take(&mut *out);
@@ -140,34 +192,34 @@ pub fn read(id: &str, timeout_ms: u64) -> Option<(Vec<u8>, bool)> {
 
 /// Write bytes (keystrokes) to the session's PTY.
 pub fn write(id: &str, data: &[u8]) -> io::Result<()> {
-    let sess = registry()
-        .lock()
-        .unwrap()
+    let sess = lock(registry())
         .get(id)
         .cloned()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such session"))?;
-    let mut w = sess.writer.lock().unwrap();
+    *lock(&sess.last_touch) = Instant::now();
+    let mut w = lock(&sess.writer);
     w.write_all(data)?;
     w.flush()
 }
 
 /// Resize the session's PTY (SIGWINCH).
 pub fn resize(id: &str, rows: u16, cols: u16) -> io::Result<()> {
-    let sess = registry()
-        .lock()
-        .unwrap()
+    let sess = lock(registry())
         .get(id)
         .cloned()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such session"))?;
-    let master = sess.master.lock().unwrap();
+    let master = lock(&sess.master);
     let r = master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
     r.map_err(oops)
 }
 
-/// Kill and forget a session.
+/// Kill, reap, and forget a session. Reaping (`wait`) avoids leaving a `<defunct>`
+/// zombie on Unix, since portable-pty's child is a plain std Child.
 pub fn close(id: &str) {
-    if let Some(sess) = registry().lock().unwrap().remove(id) {
-        let _ = sess.child.lock().unwrap().kill();
+    if let Some(sess) = lock(registry()).remove(id) {
+        let mut child = lock(&sess.child);
+        let _ = child.kill();
+        let _ = child.wait();
         sess.alive.store(false, Ordering::SeqCst);
         sess.cv.notify_all();
     }
@@ -189,7 +241,6 @@ mod tests {
     #[test]
     fn open_read_streams_output_then_ends() {
         let id = open(&echo_argv(), 24, 80).expect("open pty");
-        // Collect output until the session ends.
         let mut got = Vec::new();
         for _ in 0..50 {
             let (data, alive) = read(&id, 200).expect("session exists");
@@ -201,6 +252,7 @@ mod tests {
         let text = String::from_utf8_lossy(&got);
         assert!(text.contains("hello-pty"), "pty output was: {text:?}");
         close(&id);
+        assert!(read(&id, 10).is_none(), "closed session is gone from the registry");
     }
 
     #[test]

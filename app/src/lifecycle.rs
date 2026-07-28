@@ -2,8 +2,8 @@
 //! Draft → Active → Deprecated → Archived; transitions are a fixed guarded
 //! table, so an invalid lifecycle move (e.g. restoring a Draft) is not
 //! representable. The current state is persisted per-stack on disk, defaulting
-//! to Draft when unset — giving later features (instantiate-from-kind, archived-
-//! stack retention) a defined state to key off.
+//! to Draft when unset — giving later features (new-stack instantiation,
+//! archived-stack retention) a defined state to key off.
 
 use std::io;
 use std::path::{Path, PathBuf};

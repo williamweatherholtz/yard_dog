@@ -345,7 +345,7 @@ fn e2e_uc_lifecycle() {
     let root = tempfile::tempdir().unwrap();
     // instantiate a guardrail-clean datastore stack in Draft
     yd().args([
-        "new", "--into", &root.path().to_string_lossy(), "--name", "immich", "--kind", "datastore",
+        "new", "--into", &root.path().to_string_lossy(), "--name", "immich",
     ])
     .assert()
     .success();

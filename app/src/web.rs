@@ -64,6 +64,14 @@ fn valid_event(ev: &str) -> bool {
     matches!(ev, "activate" | "deprecate" | "archive" | "restore")
 }
 
+/// A compose service name: starts alphanumeric, then `[A-Za-z0-9._-]`. Rejects a
+/// leading `-` (which docker would parse as a flag) and any exotic input.
+fn valid_service_name(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric())
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
 /// Whether a mutating (POST) request may proceed — the anti-CSRF gate. Requires
 /// `Content-Type: application/json` (a non-"simple" type, so a cross-origin POST
 /// triggers a CORS preflight the server never allows), and refuses any request
@@ -698,18 +706,27 @@ fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
             let rows = v.get("rows").and_then(|x| x.as_u64()).unwrap_or(24) as u16;
             let cols = v.get("cols").and_then(|x| x.as_u64()).unwrap_or(80) as u16;
             let mut argv = vec!["docker".to_string(), "compose".into(), "-f".into(), abs];
+            // `--` ends option parsing so a service value can never be read as a
+            // docker flag (e.g. `--privileged`); the name is charset-validated too.
             match mode {
                 "logs" => {
                     argv.extend(["logs".into(), "-f".into(), "--no-color".into(), "--tail".into(), "200".into()]);
                     if let Some(svc) = field(&v, "service") {
                         if !svc.is_empty() {
+                            if !valid_service_name(svc) {
+                                return bad("invalid service name");
+                            }
+                            argv.push("--".into());
                             argv.push(svc.into());
                         }
                     }
                 }
                 _ => {
                     let Some(svc) = field(&v, "service") else { return bad("service required for a shell") };
-                    argv.extend(["exec".into(), svc.into(), "sh".into()]);
+                    if !valid_service_name(svc) {
+                        return bad("invalid service name");
+                    }
+                    argv.extend(["exec".into(), "--".into(), svc.into(), "sh".into()]);
                 }
             }
             match term::open(&argv, rows, cols) {
@@ -779,6 +796,11 @@ pub fn serve(host: &str, port: u16, root: &Path) -> io::Result<()> {
     println!("serving stacks under {}", root.display());
 
     for mut request in server.incoming_requests() {
+        // Each request runs on its own thread, so a blocking long-poll (the
+        // terminal read parks up to 500ms) never stalls the rest of the control
+        // plane. A panic in one handler kills only its thread, not the server.
+        let root = root.clone();
+        std::thread::spawn(move || {
         // Security: refuse any non-loopback Host (DNS-rebinding defense).
         let host_ok = request
             .headers()
@@ -788,7 +810,7 @@ pub fn serve(host: &str, port: u16, root: &Path) -> io::Result<()> {
             .unwrap_or(false);
         if !host_ok {
             let _ = request.respond(json_response(403, "{\"error\":\"forbidden host\"}".into()));
-            continue;
+            return;
         }
 
         let method = request.method().clone();
@@ -893,6 +915,7 @@ pub fn serve(host: &str, port: u16, root: &Path) -> io::Result<()> {
             _ => json_response(404, "{\"error\":\"not found\"}".into()),
         };
         let _ = request.respond(response);
+        }); // end per-request thread
     }
     Ok(())
 }

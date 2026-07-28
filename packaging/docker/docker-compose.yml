@@ -28,7 +28,11 @@ services:
       YD_PORT: ${YD_PORT:-8770}
       YD_BIND: 0.0.0.0               # container-internal; published to loopback below
     ports:
-      # host-loopback : container — the UI is never exposed beyond this machine
+      # SECURITY: keep the "127.0.0.1:" prefix — it is the ONLY access boundary for
+      # this no-auth, socket-wired control plane. (The built-in Host allowlist is a
+      # browser DNS-rebinding defense, not an access control.) Removing it — e.g.
+      # "8770:8770" — exposes UNAUTHENTICATED HOST ROOT. For remote access, front it
+      # with an authenticated reverse proxy / SSH tunnel instead of widening this.
       - "127.0.0.1:${YD_PORT:-8770}:${YD_PORT:-8770}"
     volumes:
       # 1) talk to the host Docker daemon
