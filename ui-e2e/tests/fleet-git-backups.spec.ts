@@ -6,9 +6,10 @@ test.beforeEach(async ({ page }) => {
   await waitForRail(page);
 });
 
-test('fleet view aggregates every stack with bulk actions', async ({ page }) => {
-  await page.locator('#fleet').click();
-  await expect(page.locator('main h1')).toHaveText('Fleet');
+test('all-stacks (fleet) view aggregates every stack with bulk actions', async ({ page }) => {
+  await page.locator('#nav-all').click();
+  await expect(page.locator('.dhead h1')).toHaveText('All stacks');
+  await expect(page.locator('main')).toContainText('Every stack under the served root'); // self-explanatory intro
   await expect(page.getByRole('button', { name: 'Check all' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Back up all' })).toBeVisible();
 
@@ -16,15 +17,17 @@ test('fleet view aggregates every stack with bulk actions', async ({ page }) => 
   await expect(tbl.locator('tr', { hasText: 'web' })).toBeVisible();
   await expect(tbl.locator('tr', { hasText: 'cache' })).toBeVisible();
   await expect(tbl.locator('tr', { hasText: 'risky' })).toBeVisible();
-  // fixtures start unadopted -> managed column shows "unadopted".
-  await expect(tbl.locator('.stchip.attn', { hasText: 'unadopted' }).first()).toBeVisible();
+  // fixtures start unadopted.
+  await expect(tbl.locator('.chip.warn', { hasText: 'unadopted' }).first()).toBeVisible();
 });
 
-test('git panel shows the not-connected state and a connect action', async ({ page }) => {
-  await page.locator('#git').click();
-  await expect(page.locator('main h1')).toHaveText('Git remote sync');
-  await expect(page.locator('main')).toContainText('not connected');
-  await expect(page.getByRole('button', { name: /Connect a remote/ })).toBeVisible();
+test('git panel shows the not-connected state and an inline connect form (no prompt)', async ({ page }) => {
+  await page.locator('#nav-git').click();
+  await expect(page.locator('.dhead h1')).toHaveText('Git remote');
+  await expect(page.locator('main .pill', { hasText: 'Not connected' })).toBeVisible();
+  await expect(page.locator('.form input')).toBeVisible(); // remote URL field, inline
+  await expect(page.getByRole('button', { name: 'Connect' })).toBeVisible();
+  await expect(page.locator('main')).toContainText(/system Git credentials/i);
 });
 
 test('backups tab shows the empty recovery-point state', async ({ page }) => {

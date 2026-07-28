@@ -165,20 +165,24 @@ cd /srv/stacks      # the directory holding your compose stacks
 yd serve            # → http://127.0.0.1:8770  (loopback only)
 ```
 
-The rail lists every stack with its lifecycle and an issue badge; opening one gives
-a tabbed detail view:
-- **Overview** — ranked issues (guardrails incl. the security lens), per-service
-  drift/update status chips, and actions (deploy, upgrade, back up, lifecycle, down).
-- **Compose** — an in-browser editor with **live** guardrail + preflight feedback as
-  you type; Save snapshots the config (git), Save & deploy runs the guarded path.
-- **History** — the git snapshot timeline with a unified **diff** viewer and one-click
-  **restore** of a past version.
+The left rail lists every stack with a status signal (healthy / warning / blocking);
+opening one gives a tabbed detail view — **Overview** (ranked guardrail issues,
+per-service drift/update/CPU/mem chips, and the guarded actions), **Compose** (an
+editor with **live** guardrail feedback as you type; Save snapshots to git, Save &
+deploy runs the guarded path), **Mounts** (how each service connects to the outside —
+host binds, named/anonymous volumes, networks — typed with existence), **Permissions**
+(the security/compliance lens), **History** (git timeline with a unified **diff** and
+one-click **restore**), **Backups**, and **Logs**.
 
-Every action runs through the same guarded path (guardrails → backup → health-gate
-→ rollback). A global **Fleet** view (header) gives a single pane across all stacks
-with an attention badge, fleet-wide **check-all / back-up-all**, and one-click
-**adoption** of newly-discovered stacks; each per-stack detail also has **Mounts**,
-**Permissions/compliance**, **Backups**, and **Logs** tabs.
+Every action runs through the same guarded path (guardrails → backup → health-gate →
+rollback). Data entry is **fully in-page** — no browser popups: new stacks, image
+upgrades, git connect, and confirmations are inline forms. A persistent **Console**
+dock at the bottom shows everything yd runs. The header opens **All stacks** (the
+fleet view: bulk check/backup and one-click **adoption** of newly-discovered stacks)
+and **Git** (connect a remote and push/pull all config; sign-in uses your system Git
+credentials — credential helper or SSH — and no tokens are stored). The interface is
+theme-aware (light/dark, remembered) and built around a container-terminal identity:
+Yard Dog is the yard truck that couples to and safely moves your containers.
 
 Config is versioned in a single **monorepo** at the served root; the header **Git**
 panel connects a remote and pushes/pulls all your config offsite in one action,

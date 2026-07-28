@@ -5,490 +5,575 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Yard Dog</title>
 <style>
+  /* ---- Yard Dog: a container-terminal control plane. Industrial, grounded,
+     technical. Petrol/steel is the BRAND accent only; status has its own
+     green/amber/red/blue system so warnings never blend into the brand. ---- */
   :root {
-    --bg: #f6f5f2; --panel: #ffffff; --panel-2: #efede8; --ink: #1e1c19; --muted: #6d6a63;
-    --line: #e2ded6; --accent: #c9871f; --accent-ink: #7a4f08;
-    --ok: #2f9e59; --warn: #c9871f; --bad: #cf4141; --info: #3b6fd4;
-    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --ground:#EBEDF0; --panel:#FFFFFF; --panel-2:#E3E6EA; --sunken:#F4F5F7;
+    --ink:#15181C; --ink-2:#3a4048; --muted:#616772; --line:#D3D7DD; --line-2:#c3c8cf;
+    --accent:#0C6B75; --accent-ink:#084A52; --accent-wash:#0c6b7514;
+    --ok:#1F8A55; --warn:#B8801A; --bad:#C13B3B; --info:#2F66CC;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --dock-h:210px; --shadow:0 1px 2px rgba(20,24,30,.06),0 8px 24px rgba(20,24,30,.06);
+    --r:9px;
   }
-  @media (prefers-color-scheme: dark) { :root {
-    --bg:#17150f; --panel:#201d16; --panel-2:#2a251c; --ink:#ece7db; --muted:#a49d8c;
-    --line:#322c22; --accent:#e0a94a; --accent-ink:#f2cd85;
-    --ok:#56c07f; --warn:#e0a94a; --bad:#e86a6a; --info:#6f9bf0; } }
-  :root[data-theme="dark"] {
-    --bg:#17150f; --panel:#201d16; --panel-2:#2a251c; --ink:#ece7db; --muted:#a49d8c;
-    --line:#322c22; --accent:#e0a94a; --accent-ink:#f2cd85;
-    --ok:#56c07f; --warn:#e0a94a; --bad:#e86a6a; --info:#6f9bf0; }
-  :root[data-theme="light"] {
-    --bg:#f6f5f2; --panel:#ffffff; --panel-2:#efede8; --ink:#1e1c19; --muted:#6d6a63;
-    --line:#e2ded6; --accent:#c9871f; --accent-ink:#7a4f08;
-    --ok:#2f9e59; --warn:#c9871f; --bad:#cf4141; --info:#3b6fd4; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; -webkit-font-smoothing:antialiased; }
-  header.top { display:flex; align-items:center; gap:12px; padding:12px 18px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:5; }
-  .brand { display:flex; align-items:baseline; gap:9px; font-weight:700; letter-spacing:-.01em; }
-  .brand .paw { color:var(--accent); font-size:20px; }
-  .brand small { font-weight:500; color:var(--muted); }
-  .top .spacer { flex:1; }
-  .loopback { font:12px/1 var(--mono); color:var(--muted); border:1px solid var(--line); padding:5px 8px; border-radius:6px; background:var(--panel-2); }
-  .loopback b { color:var(--ok); }
-  button { font:inherit; cursor:pointer; border:1px solid var(--line); background:var(--panel-2); color:var(--ink); padding:6px 11px; border-radius:7px; transition:background .12s,border-color .12s; }
-  button:hover { border-color:var(--accent); }
-  button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-  button.primary { background:var(--accent); color:#17150f; border-color:var(--accent); font-weight:600; }
-  button.danger { border-color:color-mix(in srgb,var(--bad) 45%,var(--line)); color:var(--bad); }
-  button.danger:hover { background:color-mix(in srgb,var(--bad) 12%,transparent); }
-  button#notif.attn { border-color:var(--bad); color:var(--bad); background:color-mix(in srgb,var(--bad) 12%,transparent); }
-  button:disabled { opacity:.45; cursor:not-allowed; }
-  .layout { display:grid; grid-template-columns:290px 1fr; min-height:calc(100vh - 58px); }
-  @media (max-width:820px){ .layout{ grid-template-columns:1fr; } }
-  aside { border-right:1px solid var(--line); background:var(--panel); padding:12px; overflow-y:auto; }
-  .rail-head { display:flex; gap:8px; margin:4px 4px 12px; }
-  .rail-head input { flex:1; min-width:0; font:13px/1 var(--mono); padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink); }
-  .stack-item { width:100%; text-align:left; display:flex; align-items:center; gap:8px; padding:10px 11px; border-radius:9px; border:1px solid transparent; background:transparent; margin-bottom:3px; }
-  .stack-item:hover { background:var(--panel-2); }
-  .stack-item.active { background:var(--panel-2); border-color:var(--line); }
-  .stack-item .col { display:flex; flex-direction:column; gap:4px; min-width:0; flex:1; }
-  .stack-item .nm { font-weight:600; }
-  .stack-item .sub { font:12px/1.3 var(--mono); color:var(--muted); display:flex; gap:8px; }
-  .badge-issue { font:600 11px/1 system-ui; padding:3px 7px; border-radius:999px; flex:none; }
-  .badge-issue.block { background:color-mix(in srgb,var(--bad) 16%,transparent); color:var(--bad); }
-  .badge-issue.warn { background:color-mix(in srgb,var(--warn) 18%,transparent); color:var(--warn); }
-  .badge-issue.ok { background:color-mix(in srgb,var(--ok) 15%,transparent); color:var(--ok); }
-  .newbtn { width:100%; margin-top:8px; }
-  main { padding:18px 22px; overflow-y:auto; }
-  .empty { color:var(--muted); max-width:46ch; margin-top:8vh; }
-  .empty h2 { color:var(--ink); font-weight:650; }
-  .detail-head { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
-  .detail-head h1 { font-size:22px; margin:0; letter-spacing:-.01em; }
-  .path { font:12px/1 var(--mono); color:var(--muted); margin:2px 0 12px; word-break:break-all; }
-  .badge { font:600 12px/1 system-ui; padding:5px 9px; border-radius:999px; display:inline-flex; align-items:center; gap:6px; }
-  .badge::before { content:""; width:7px; height:7px; border-radius:50%; background:currentColor; }
-  .badge.ready { color:var(--ok); background:color-mix(in srgb,var(--ok) 14%,transparent); }
-  .badge.notready { color:var(--bad); background:color-mix(in srgb,var(--bad) 14%,transparent); }
-  .chip { font:600 11px/1 var(--mono); text-transform:uppercase; letter-spacing:.04em; padding:4px 8px; border-radius:6px; background:var(--panel-2); color:var(--muted); border:1px solid var(--line); }
-  .chip.active { color:var(--ok); } .chip.deprecated { color:var(--warn); } .chip.archived { color:var(--bad); }
-  .tabs { display:flex; gap:2px; border-bottom:1px solid var(--line); margin:14px 0 18px; flex-wrap:wrap; }
-  .tab { background:transparent; border:none; border-bottom:2px solid transparent; border-radius:0; padding:8px 12px; color:var(--muted); font-weight:600; }
-  .tab:hover { color:var(--ink); border-color:var(--line); }
-  .tab.active { color:var(--ink); border-color:var(--accent); }
-  .tab .soon { font:600 9px/1 var(--mono); color:var(--muted); vertical-align:super; }
-  .actionbar { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:18px; }
-  section h3 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:20px 0 10px; }
-  table { width:100%; border-collapse:collapse; }
-  th,td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:middle; }
-  th { font:600 12px/1 system-ui; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
-  td.img { font:13px/1.3 var(--mono); word-break:break-all; }
-  .kind { font:600 11px/1 var(--mono); text-transform:uppercase; padding:3px 7px; border-radius:5px; background:color-mix(in srgb,var(--info) 14%,transparent); color:var(--info); }
-  .kind.datastore { background:color-mix(in srgb,var(--bad) 13%,transparent); color:var(--bad); }
-  .kind.proxy { background:color-mix(in srgb,var(--accent) 16%,transparent); color:var(--accent-ink); }
-  .stchip { font:600 11px/1 system-ui; padding:4px 8px; border-radius:999px; display:inline-flex; align-items:center; gap:5px; margin-right:6px; }
-  .stchip::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; }
-  .stchip.ok { color:var(--ok); background:color-mix(in srgb,var(--ok) 13%,transparent); }
-  .stchip.attn { color:var(--warn); background:color-mix(in srgb,var(--warn) 15%,transparent); }
-  .stchip.bad { color:var(--bad); background:color-mix(in srgb,var(--bad) 13%,transparent); }
-  .stchip.dim { color:var(--muted); background:var(--panel-2); }
-  .issue { display:flex; gap:10px; align-items:baseline; padding:8px 10px; border-radius:8px; margin-bottom:6px; border:1px solid var(--line); }
-  .issue .sev { font:600 11px/1 var(--mono); text-transform:uppercase; padding:3px 6px; border-radius:5px; flex:none; }
-  .issue.block { border-color:color-mix(in srgb,var(--bad) 40%,var(--line)); } .issue.block .sev { background:var(--bad); color:#fff; }
-  .issue.warn .sev { background:color-mix(in srgb,var(--warn) 22%,transparent); color:var(--warn); }
-  .issue.info .sev { background:color-mix(in srgb,var(--info) 18%,transparent); color:var(--info); }
-  .issue .src { font:12px/1 var(--mono); color:var(--muted); }
-  .clean { color:var(--ok); }
-  textarea.editor { width:100%; min-height:340px; font:13px/1.5 var(--mono); padding:12px 14px; border:1px solid var(--line); border-radius:10px; background:var(--panel); color:var(--ink); resize:vertical; tab-size:2; }
-  .editrow { display:flex; gap:16px; align-items:flex-start; }
-  .editrow .col-main { flex:1; min-width:0; }
-  .validate { width:280px; flex:none; }
-  .validate .v-badge { margin-bottom:10px; }
-  pre.diff { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; font:12.5px/1.5 var(--mono); overflow:auto; max-height:420px; white-space:pre; }
-  pre.diff .add { color:var(--ok); } pre.diff .del { color:var(--bad); } pre.diff .hdr { color:var(--accent-ink); }
-  .hist { list-style:none; padding:0; margin:0; }
-  .hist li { display:flex; align-items:center; gap:12px; padding:9px 10px; border-bottom:1px solid var(--line); }
-  .hist .sha { font:12px/1 var(--mono); color:var(--muted); }
-  .hist .msg { flex:1; }
-  .console { margin-top:22px; }
-  .console pre { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 15px; font:12.5px/1.55 var(--mono); max-height:260px; overflow:auto; white-space:pre-wrap; word-break:break-word; margin:0; }
-  .console .ok { color:var(--ok); } .console .bad { color:var(--bad); } .console .cmd { color:var(--accent-ink); font-weight:600; } .console .dim { color:var(--muted); }
-  .spin { display:inline-block; width:12px; height:12px; border:2px solid var(--muted); border-top-color:transparent; border-radius:50%; animation:sp .7s linear infinite; vertical-align:-1px; }
-  @keyframes sp { to { transform:rotate(360deg); } }
-  @media (prefers-reduced-motion:reduce){ .spin{ animation:none; } }
-  .muted { color:var(--muted); }
+  @media (prefers-color-scheme:dark){ :root{
+    --ground:#111418; --panel:#191D22; --panel-2:#222831; --sunken:#14181d;
+    --ink:#E7EAED; --ink-2:#c2c8d0; --muted:#98A0AA; --line:#2A3039; --line-2:#39414c;
+    --accent:#2AA7B5; --accent-ink:#7FD4DE; --accent-wash:#2aa7b51f;
+    --ok:#4FBF83; --warn:#DCA340; --bad:#E06666; --info:#6C9BF0;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35); } }
+  :root[data-theme="dark"]{
+    --ground:#111418; --panel:#191D22; --panel-2:#222831; --sunken:#14181d;
+    --ink:#E7EAED; --ink-2:#c2c8d0; --muted:#98A0AA; --line:#2A3039; --line-2:#39414c;
+    --accent:#2AA7B5; --accent-ink:#7FD4DE; --accent-wash:#2aa7b51f;
+    --ok:#4FBF83; --warn:#DCA340; --bad:#E06666; --info:#6C9BF0;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35); }
+  :root[data-theme="light"]{
+    --ground:#EBEDF0; --panel:#FFFFFF; --panel-2:#E3E6EA; --sunken:#F4F5F7;
+    --ink:#15181C; --ink-2:#3a4048; --muted:#616772; --line:#D3D7DD; --line-2:#c3c8cf;
+    --accent:#0C6B75; --accent-ink:#084A52; --accent-wash:#0c6b7514;
+    --ok:#1F8A55; --warn:#B8801A; --bad:#C13B3B; --info:#2F66CC;
+    --shadow:0 1px 2px rgba(20,24,30,.06),0 8px 24px rgba(20,24,30,.06); }
+
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{margin:0;background:var(--ground);color:var(--ink);font:14.5px/1.5 var(--sans);-webkit-font-smoothing:antialiased;height:100vh;display:flex;flex-direction:column;overflow:hidden;}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums;}
+  .eyebrow{font:600 10.5px/1 var(--sans);text-transform:uppercase;letter-spacing:.11em;color:var(--muted);}
+
+  /* header */
+  header.top{display:flex;align-items:center;gap:14px;padding:11px 18px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20;}
+  .brand{display:flex;align-items:center;gap:10px;}
+  .brand .mark{width:26px;height:22px;flex:none;color:var(--accent);}
+  .brand .word{font:800 15px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;}
+  .brand .word b{color:var(--accent);font-weight:800;}
+  .brand .tag{font:500 11px/1 var(--sans);color:var(--muted);letter-spacing:.02em;}
+  .top .sp{flex:1;}
+  .lock{display:inline-flex;align-items:center;gap:6px;font:600 11px/1 var(--mono);color:var(--muted);border:1px solid var(--line);background:var(--sunken);padding:6px 9px;border-radius:7px;}
+  .lock b{color:var(--ok);}
+  .navbtn{display:inline-flex;align-items:center;gap:7px;font:600 12.5px/1 var(--sans);cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:7px 11px;border-radius:8px;transition:border-color .12s,background .12s;}
+  .navbtn:hover{border-color:var(--accent);}
+  .navbtn.on{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-wash);}
+  .navbtn:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+  .navbtn .cnt{font:700 10px/1 var(--mono);background:var(--bad);color:#fff;border-radius:999px;padding:2px 5px;}
+
+  /* generic button */
+  button{font:inherit;}
+  .btn{display:inline-flex;align-items:center;gap:6px;font:600 13px/1 var(--sans);cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:8px 12px;border-radius:8px;transition:border-color .12s,background .12s;}
+  .btn:hover{border-color:var(--accent);}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;}
+  .btn.primary:hover{filter:brightness(1.06);}
+  .btn.danger{border-color:color-mix(in srgb,var(--bad) 45%,var(--line));color:var(--bad);}
+  .btn.danger:hover{background:color-mix(in srgb,var(--bad) 12%,transparent);}
+  .btn.sm{padding:5px 9px;font-size:12px;}
+  .btn:disabled{opacity:.45;cursor:not-allowed;}
+
+  /* layout */
+  .layout{display:grid;grid-template-columns:300px 1fr;flex:1;min-height:0;}
+  @media(max-width:860px){.layout{grid-template-columns:1fr;}}
+  aside{border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0;}
+  .rail-top{padding:12px 12px 8px;display:flex;flex-direction:column;gap:9px;}
+  .rail-top .lbl{display:flex;align-items:center;justify-content:space-between;}
+  .rail-top input{width:100%;font:13px/1 var(--mono);padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--sunken);color:var(--ink);}
+  .rail-list{flex:1;overflow-y:auto;padding:2px 10px 12px;}
+  .rail-foot{padding:10px 12px;border-top:1px solid var(--line);}
+  .srow{width:100%;text-align:left;display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;border:1px solid transparent;background:transparent;cursor:pointer;margin-bottom:2px;}
+  .srow:hover{background:var(--sunken);}
+  .srow.active{background:var(--accent-wash);border-color:color-mix(in srgb,var(--accent) 35%,var(--line));}
+  .srow .col{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;}
+  .srow .nm{font-weight:650;letter-spacing:-.005em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .srow .meta{font:11.5px/1 var(--mono);color:var(--muted);display:flex;gap:8px;}
+  .srow .n{font:700 11px/1 var(--mono);padding:3px 7px;border-radius:999px;flex:none;}
+  .srow .n.bad{background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad);}
+  .srow .n.warn{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn);}
+  .srow .n.ok{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok);}
+
+  /* status signal light */
+  .sig{width:9px;height:9px;border-radius:50%;flex:none;background:var(--muted);box-shadow:0 0 0 3px color-mix(in srgb,var(--muted) 16%,transparent);}
+  .sig.ok{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 20%,transparent);}
+  .sig.warn{background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 22%,transparent);}
+  .sig.bad{background:var(--bad);box-shadow:0 0 0 3px color-mix(in srgb,var(--bad) 22%,transparent);}
+  .sig.info{background:var(--info);box-shadow:0 0 0 3px color-mix(in srgb,var(--info) 20%,transparent);}
+
+  /* main */
+  main{overflow-y:auto;padding:20px 26px 26px;min-height:0;}
+  .empty{max-width:52ch;margin-top:8vh;color:var(--muted);}
+  .empty h2{color:var(--ink);font-weight:700;letter-spacing:-.01em;margin:0 0 6px;}
+  .empty .big{width:46px;height:38px;color:var(--line-2);margin-bottom:14px;}
+
+  .dhead{display:flex;align-items:center;flex-wrap:wrap;gap:12px;}
+  .dhead h1{font-size:21px;margin:0;letter-spacing:-.015em;}
+  .dhead .path{width:100%;font:12px/1 var(--mono);color:var(--muted);word-break:break-all;margin-top:-2px;}
+  .pill{display:inline-flex;align-items:center;gap:6px;font:600 11.5px/1 var(--sans);padding:5px 9px;border-radius:999px;border:1px solid var(--line);background:var(--panel-2);color:var(--ink-2);}
+  .pill.ready{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 30%,var(--line));background:color-mix(in srgb,var(--ok) 10%,transparent);}
+  .pill.notready{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 30%,var(--line));background:color-mix(in srgb,var(--bad) 10%,transparent);}
+  .pill.life{text-transform:capitalize;}
+
+  .tabs{display:flex;gap:3px;border-bottom:1px solid var(--line);margin:16px 0 18px;flex-wrap:wrap;}
+  .tab{background:transparent;border:none;border-bottom:2px solid transparent;padding:9px 13px;color:var(--muted);font:650 13px/1 var(--sans);cursor:pointer;border-radius:0;}
+  .tab:hover{color:var(--ink);}
+  .tab.active{color:var(--ink);border-color:var(--accent);}
+
+  .bar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;}
+  section{margin-bottom:6px;}
+  h3.sec{font:600 11px/1 var(--sans);text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin:22px 0 10px;}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);}
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:middle;}
+  tr:last-child td{border-bottom:none;}
+  th{font:600 10.5px/1 var(--sans);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;background:var(--sunken);}
+  td.m{font-family:var(--mono);font-variant-numeric:tabular-nums;word-break:break-all;}
+
+  .type{font:600 10.5px/1 var(--mono);text-transform:uppercase;letter-spacing:.03em;padding:3px 7px;border-radius:5px;border:1px solid var(--line);color:var(--ink-2);background:var(--panel-2);}
+  .type.host-bind{color:var(--info);border-color:color-mix(in srgb,var(--info) 30%,var(--line));background:color-mix(in srgb,var(--info) 9%,transparent);}
+  .type.named-volume{color:var(--accent-ink);border-color:color-mix(in srgb,var(--accent) 30%,var(--line));background:var(--accent-wash);}
+  .type.anonymous{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 30%,var(--line));background:color-mix(in srgb,var(--warn) 10%,transparent);}
+  .type.network,.type.tmpfs{color:var(--muted);}
+  .type.port{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 30%,var(--line));background:color-mix(in srgb,var(--ok) 9%,transparent);}
+
+  .chip{display:inline-flex;align-items:center;gap:5px;font:600 11px/1 var(--sans);padding:4px 8px;border-radius:999px;margin-right:6px;color:var(--ink-2);background:var(--panel-2);border:1px solid var(--line);}
+  .chip.ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 11%,transparent);border-color:transparent;}
+  .chip.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 13%,transparent);border-color:transparent;}
+  .chip.bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,transparent);border-color:transparent;}
+  .chip.dim{color:var(--muted);}
+
+  .issue{display:flex;gap:11px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:7px;background:var(--panel);}
+  .issue .sev{font:700 10px/1 var(--mono);text-transform:uppercase;letter-spacing:.04em;padding:4px 6px;border-radius:5px;flex:none;margin-top:1px;}
+  .issue.block{border-color:color-mix(in srgb,var(--bad) 40%,var(--line));}
+  .issue.block .sev{background:var(--bad);color:#fff;}
+  .issue.warn .sev{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn);}
+  .issue.info .sev{background:color-mix(in srgb,var(--info) 18%,transparent);color:var(--info);}
+  .issue .src{font:12px/1.4 var(--mono);color:var(--muted);}
+  .clean{display:flex;align-items:center;gap:8px;color:var(--ok);font-weight:600;padding:10px 0;}
+
+  /* editor */
+  .edit{display:flex;gap:16px;align-items:flex-start;}
+  .edit .main{flex:1;min-width:0;}
+  textarea.editor{width:100%;min-height:360px;font:13px/1.55 var(--mono);padding:13px 15px;border:1px solid var(--line);border-radius:var(--r);background:var(--panel);color:var(--ink);resize:vertical;tab-size:2;}
+  .vpanel{width:270px;flex:none;}
+  .vpanel .head{font:600 10.5px/1 var(--sans);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:9px;}
+  pre.diff{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:13px 15px;font:12.5px/1.5 var(--mono);overflow:auto;max-height:440px;white-space:pre;margin:0;}
+  pre.diff .add{color:var(--ok);} pre.diff .del{color:var(--bad);} pre.diff .hdr{color:var(--accent-ink);}
+  ul.hist{list-style:none;padding:0;margin:0;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--panel);}
+  ul.hist li{display:flex;align-items:center;gap:12px;padding:10px 12px;border-bottom:1px solid var(--line);}
+  ul.hist li:last-child{border-bottom:none;}
+  ul.hist .sha{font:12px/1 var(--mono);color:var(--accent-ink);}
+  ul.hist .msg{flex:1;}
+
+  /* inline forms */
+  .form{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;max-width:640px;box-shadow:var(--shadow);}
+  .field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px;}
+  .field label{font:600 11px/1 var(--sans);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);}
+  .field input{font:14px/1.3 var(--mono);padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--sunken);color:var(--ink);}
+  .field .hint{font:12px/1.4 var(--sans);color:var(--muted);}
+  .preview{font:12px/1.5 var(--mono);background:var(--sunken);border:1px dashed var(--line);border-radius:8px;padding:11px 13px;white-space:pre;overflow:auto;max-height:220px;color:var(--ink-2);}
+
+  /* confirm / toast banner */
+  #banner{position:fixed;top:66px;left:50%;transform:translateX(-50%);z-index:60;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;width:min(560px,92vw);}
+  #banner>*{pointer-events:auto;width:100%;}
+  .confirm{background:var(--panel);border:1px solid var(--line-2);border-radius:10px;box-shadow:var(--shadow);padding:13px 15px;display:flex;align-items:center;gap:12px;}
+  .confirm .txt{flex:1;font-size:13.5px;}
+  .toast{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:9px;box-shadow:var(--shadow);padding:11px 14px;font-size:13px;display:flex;align-items:center;gap:9px;animation:slidein .16s ease;}
+  .toast.ok{border-left-color:var(--ok);} .toast.bad{border-left-color:var(--bad);}
+  @keyframes slidein{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:none;}}
+
+  /* console dock */
+  .dock{flex:none;z-index:30;background:var(--panel);border-top:1px solid var(--line-2);box-shadow:0 -6px 20px rgba(0,0,0,.06);display:flex;flex-direction:column;height:var(--dock-h);transition:height .16s ease;}
+  .dock.collapsed{height:38px;}
+  .dock-bar{display:flex;align-items:center;gap:10px;height:38px;padding:0 14px;cursor:pointer;flex:none;border-bottom:1px solid var(--line);}
+  .dock-bar .ttl{font:700 10.5px/1 var(--sans);text-transform:uppercase;letter-spacing:.1em;color:var(--muted);display:flex;align-items:center;gap:8px;}
+  .dock-bar .last{flex:1;min-width:0;font:12px/1 var(--mono);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .dock-bar .x{display:inline-flex;gap:4px;}
+  .dock-body{flex:1;overflow:auto;padding:10px 14px;background:var(--sunken);}
+  .dock.collapsed .dock-body{display:none;}
+  #console{font:12.5px/1.6 var(--mono);white-space:pre-wrap;word-break:break-word;margin:0;}
+  #console .cmd{color:var(--accent-ink);font-weight:700;} #console .ok{color:var(--ok);} #console .bad{color:var(--bad);} #console .dim{color:var(--muted);}
+  .spin{display:inline-block;width:11px;height:11px;border:2px solid var(--muted);border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px;}
+  @keyframes sp{to{transform:rotate(360deg);}}
+  @media(prefers-reduced-motion:reduce){.spin{animation:none;}.toast{animation:none;}.dock{transition:none;}}
+  .muted{color:var(--muted);}
 </style>
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="paw">◕</span> Yard&nbsp;Dog <small>control plane</small></div>
-  <div class="spacer"></div>
-  <span class="loopback">🔒 <b>loopback</b> · 127.0.0.1</span>
-  <button id="fleet" title="Fleet overview">▦ Fleet</button>
-  <button id="notif" title="Stacks needing attention" style="display:none">🔔 <span id="notifn">0</span></button>
-  <button id="git" title="Git remote sync">⇅ Git</button>
-  <button id="theme" title="Toggle theme" aria-label="Toggle theme">◐</button>
+  <div class="brand">
+    <svg class="mark" viewBox="0 0 34 28" fill="none" aria-hidden="true">
+      <rect x="1.5" y="7" width="24" height="14" rx="2" stroke="currentColor" stroke-width="2"/>
+      <path d="M7 7v14M12.5 7v14M18 7v14" stroke="currentColor" stroke-width="1.4" opacity=".7"/>
+      <path d="M25.5 11h4.2l2.8 3.2V21h-7z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+      <circle cx="9" cy="23.5" r="2.4" fill="currentColor"/><circle cx="27" cy="23.5" r="2.4" fill="currentColor"/>
+    </svg>
+    <div>
+      <div class="word">Yard<b>Dog</b></div>
+    </div>
+    <span class="tag">container control plane</span>
+  </div>
+  <div class="sp"></div>
+  <span class="lock">🔒 <b>loopback</b> · 127.0.0.1</span>
+  <button class="navbtn" id="nav-all" title="Every stack under the served root">▤ All stacks</button>
+  <button class="navbtn" id="nav-git" title="Sync config with a Git remote"><span class="sig" id="git-sig"></span> Git</button>
+  <button class="navbtn" id="nav-theme" title="Toggle light / dark" aria-label="Toggle theme">◐</button>
 </header>
+
 <div class="layout">
   <aside>
-    <div class="rail-head">
+    <div class="rail-top">
+      <div class="lbl"><span class="eyebrow">Yard</span><span class="eyebrow mono" id="stackcount"></span></div>
       <input id="filter" placeholder="filter stacks…" autocomplete="off" />
-      <button id="refresh" title="Reload">↻</button>
     </div>
-    <div id="stacks"></div>
-    <button class="newbtn" id="newstack">＋ New stack</button>
+    <div class="rail-list" id="rail"></div>
+    <div class="rail-foot"><button class="btn primary" id="newstack" style="width:100%">＋ New stack</button></div>
   </aside>
-  <main id="main"><div class="empty"><h2>Select a stack</h2><p>Pick a stack on the left to see its issues, edit its compose, review history, and act on it — or create a new one.</p></div></main>
+  <main id="main"></main>
 </div>
+
+<div class="dock" id="dock">
+  <div class="dock-bar" id="dockbar">
+    <span class="ttl">▚ Console</span>
+    <span class="last" id="docklast">Ready.</span>
+    <span class="x"><button class="btn sm" id="dockclear" title="Clear">Clear</button><button class="btn sm" id="docktoggle" title="Expand / collapse">▾</button></span>
+  </div>
+  <div class="dock-body"><pre id="console"></pre></div>
+</div>
+
+<div id="banner"></div>
+
 <script>
-const $ = (s,r=document)=>r.querySelector(s);
-const el=(t,c,txt)=>{const e=document.createElement(t); if(c)e.className=c; if(txt!=null)e.textContent=txt; return e;};
-let stacks=[], current=null, tab="overview", detail=null;
-// Unsaved compose edits, keyed by stack path. The editor content lives HERE, not
-// just in the DOM, so switching tabs (which re-renders #tabbody) never loses it —
-// including for a brand-new stack the server has no file for yet.
-let drafts={};
-const TABS=[["overview","Overview"],["compose","Compose"],["history","History"],["mounts","Mounts"],["permissions","Permissions"],["backups","Backups"],["logs","Logs"]];
+const $=(s,r=document)=>r.querySelector(s);
+const el=(t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e;};
+const enc=encodeURIComponent;
+let stacks=[],current=null,tab="overview",detail=null,drafts={},consoleBuf=[];
+const TABS=[["overview","Overview"],["compose","Compose"],["mounts","Mounts"],["permissions","Permissions"],["history","History"],["backups","Backups"],["logs","Logs"]];
 
-$("#theme").onclick=()=>{const n=document.documentElement.getAttribute("data-theme");const nx=n==="dark"?"light":(n==="light"?"dark":(matchMedia("(prefers-color-scheme: dark)").matches?"light":"dark"));document.documentElement.setAttribute("data-theme",nx);};
+// ---- theme (persisted) ----
+(function(){const s=localStorage.getItem("yd-theme");if(s)document.documentElement.setAttribute("data-theme",s);})();
+$("#nav-theme").onclick=()=>{const c=document.documentElement.getAttribute("data-theme");
+  const nx=c==="dark"?"light":c==="light"?"dark":(matchMedia("(prefers-color-scheme: dark)").matches?"light":"dark");
+  document.documentElement.setAttribute("data-theme",nx);localStorage.setItem("yd-theme",nx);};
 
+// ---- api ----
 async function api(path,opts){const r=await fetch(path,opts);const t=await r.text();try{return{ok:r.ok,data:JSON.parse(t)};}catch{return{ok:r.ok,data:{raw:t}};}}
 async function post(path,body){return api(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});}
 
-async function loadStacks(){
-  const box=$("#stacks"); const {data}=await api("/api/stacks"); stacks=data.stacks||[];
-  renderRail(); updateNotif();
-}
-function updateNotif(){
-  const n=stacks.filter(s=>s.blocks>0).length;
-  const btn=$("#notif"); $("#notifn").textContent=n; btn.style.display=n?"":"none";
-  btn.classList.toggle("attn",n>0);
-}
-function renderRail(){
-  const box=$("#stacks"); box.innerHTML=""; const f=$("#filter").value.toLowerCase();
-  if(!stacks.length){ box.append(el("p","muted","No stacks under the served root.")); return; }
-  for(const s of stacks){
-    if(f && !s.name.toLowerCase().includes(f)) continue;
-    const b=el("button","stack-item"+(current===s.compose?" active":""));
-    const col=el("div","col"); col.append(el("span","nm",s.name));
-    const sub=el("span","sub"); sub.append(el("span","chip "+s.lifecycle,s.lifecycle)); sub.append(el("span",null,s.services+" svc")); col.append(sub);
-    b.append(col);
-    if(s.blocks>0) b.append(el("span","badge-issue block",s.blocks+"⚠"));
-    else if(s.warns>0) b.append(el("span","badge-issue warn",s.warns));
-    else b.append(el("span","badge-issue ok","✓"));
-    b.onclick=()=>selectStack(s.compose);
-    box.append(b);
-  }
-}
-$("#filter").oninput=renderRail; $("#refresh").onclick=loadStacks;
-
-async function selectStack(compose,keepTab){ current=compose; if(!keepTab)tab="overview"; renderRail();
-  $("#main").innerHTML="Loading…";
-  const {ok,data}=await api("/api/stack?compose="+encodeURIComponent(compose));
-  if(!ok){ $("#main").innerHTML=""; $("#main").append(el("p","empty","Could not load stack.")); return; }
-  detail=data; renderShell();
-}
-function stackName(c){ return (stacks.find(s=>s.compose===c)||{}).name||c; }
-
-function renderShell(){
-  const m=$("#main"); m.innerHTML="";
-  const head=el("div","detail-head");
-  head.append(el("h1",null,stackName(current)));
-  head.append(el("span","badge "+(detail.ready?"ready":"notready"),detail.ready?"READY":"NOT READY"));
-  head.append(el("span","chip "+detail.lifecycle,detail.lifecycle));
-  m.append(head); m.append(el("div","path",detail.compose));
-  const tabs=el("div","tabs");
-  for(const [id,label,soon] of TABS){ const t=el("button","tab"+(tab===id?" active":""),label); if(soon)t.append(el("span","soon"," soon")); t.onclick=()=>{tab=id; renderShell();}; tabs.append(t); }
-  m.append(tabs);
-  const body=el("div"); body.id="tabbody"; m.append(body);
-  ({overview:renderOverview,compose:renderCompose,history:renderHistory,mounts:renderMounts,permissions:renderPermissions,backups:renderBackups,logs:renderLogs}[tab]||renderSoon)();
-  // console lives under every tab; replay the buffer so output survives tab switches
-  const c=el("section","console"); c.append(el("h3",null,"Output")); const pre=el("pre"); pre.id="console"; renderConsole(pre); c.append(pre); m.append(c);
-}
-function renderSoon(){ $("#tabbody").append(el("p","empty","This view is coming soon — the roadmap use case is recorded.")); }
-// Output console is a persistent buffer, so action results survive tab switches
-// (renderShell rebuilds the DOM). Replayed wherever a #console pre is mounted.
-let consoleBuf=[];
-function renderConsole(pre){ pre.innerHTML="";
-  if(!consoleBuf.length){ pre.append(el("span","dim","Actions print here.")); return; }
-  for(const l of consoleBuf) pre.append(el("span",l.cls,l.text+"\n"));
+// ---- console dock ----
+function renderConsole(){const pre=$("#console");if(!pre)return;pre.innerHTML="";
+  if(!consoleBuf.length){pre.append(el("span","dim","Command output appears here — deploys, backups, git, everything yd runs."));}
+  else for(const l of consoleBuf)pre.append(el("span",l.cls,l.text+"\n"));
   pre.scrollTop=pre.scrollHeight;
+  const last=consoleBuf.length?consoleBuf[consoleBuf.length-1].text:"Ready.";$("#docklast").textContent=last;}
+function logLine(cls,text){consoleBuf.push({cls,text});if(consoleBuf.length>300)consoleBuf.shift();
+  if($("#dock").classList.contains("collapsed")&&(cls==="cmd"||cls==="bad"))setDock(true);renderConsole();}
+function setDock(open){$("#dock").classList.toggle("collapsed",!open);$("#docktoggle").textContent=open?"▾":"▴";}
+$("#dockbar").onclick=e=>{if(e.target.id==="dockclear")return;setDock($("#dock").classList.contains("collapsed"));};
+$("#dockclear").onclick=e=>{e.stopPropagation();consoleBuf=[];renderConsole();};
+setDock(true);renderConsole();
+
+// ---- banner: inline confirm + toast (no browser popups) ----
+function toast(cls,msg){const b=$("#banner");const t=el("div","toast "+(cls||""));t.append(el("span",null,msg));b.append(t);
+  setTimeout(()=>{t.style.transition="opacity .2s";t.style.opacity="0";setTimeout(()=>t.remove(),200);},2600);}
+function askConfirm(msg,okLabel="Confirm",danger=false){return new Promise(res=>{const b=$("#banner");b.innerHTML="";
+  const c=el("div","confirm");c.append(el("span","txt",msg));
+  const yes=el("button","btn "+(danger?"danger":"primary")+" sm",okLabel);const no=el("button","btn sm","Cancel");
+  yes.onclick=()=>{c.remove();res(true);};no.onclick=()=>{c.remove();res(false);};
+  c.append(no);c.append(yes);b.append(c);yes.focus();});}
+
+// ---- rail ----
+async function loadStacks(){const {data}=await api("/api/stacks");stacks=data.stacks||[];renderRail();updateGitSig();}
+function stackSig(s){return s.blocks>0?"bad":s.warns>0?"warn":"ok";}
+function renderRail(){const box=$("#rail");box.innerHTML="";const f=$("#filter").value.toLowerCase();
+  const shown=stacks.filter(s=>!f||s.name.toLowerCase().includes(f));
+  $("#stackcount").textContent=stacks.length?shown.length+"/"+stacks.length:"";
+  if(!stacks.length){box.append(el("p","muted","No stacks under the served root. Create one below."));return;}
+  if(!shown.length){box.append(el("p","muted","No stacks match “"+f+"”."));return;}
+  for(const s of shown){const b=el("button","srow"+(current===s.compose?" active":""));
+    b.append(el("span","sig "+stackSig(s)));
+    const col=el("div","col");col.append(el("span","nm",s.name));
+    const meta=el("span","meta");meta.append(el("span",null,s.lifecycle));meta.append(el("span",null,s.services+" svc"));col.append(meta);
+    b.append(col);
+    if(s.blocks>0)b.append(el("span","n bad",s.blocks+" blk"));else if(s.warns>0)b.append(el("span","n warn",String(s.warns)));else b.append(el("span","n ok","ok"));
+    b.onclick=()=>selectStack(s.compose);box.append(b);}
 }
-function logLine(cls,text){ consoleBuf.push({cls,text}); if(consoleBuf.length>250)consoleBuf.shift(); const pre=$("#console"); if(pre)renderConsole(pre); }
+$("#filter").oninput=renderRail;
+
+async function selectStack(compose,keepTab){current=compose;if(!keepTab)tab="overview";renderRail();
+  $("#main").innerHTML='<p class="muted">Loading…</p>';
+  const {ok,data}=await api("/api/stack?compose="+enc(compose));
+  if(!ok){$("#main").innerHTML="";$("#main").append(el("p","empty","Could not load this stack."));return;}
+  detail=data;renderShell();}
+function stackName(c){return (stacks.find(s=>s.compose===c)||{}).name||c;}
+
+function renderShell(){const m=$("#main");m.innerHTML="";
+  const head=el("div","dhead");
+  const sig=detail.ready?"ok":"bad";head.append(el("span","sig "+sig));
+  head.append(el("h1",null,stackName(current)));
+  head.append(el("span","pill "+(detail.ready?"ready":"notready"),detail.ready?"Ready":"Not ready"));
+  head.append(el("span","pill life",detail.lifecycle));
+  head.append(el("span","path",detail.compose));
+  m.append(head);
+  const tabs=el("div","tabs");
+  for(const [id,label] of TABS){const t=el("button","tab"+(tab===id?" active":""),label);t.onclick=()=>{tab=id;renderShell();};tabs.append(t);}
+  m.append(tabs);
+  const body=el("div");body.id="tabbody";m.append(body);
+  ({overview:renderOverview,compose:renderCompose,mounts:renderMounts,permissions:renderPermissions,history:renderHistory,backups:renderBackups,logs:renderLogs}[tab])();
+}
 
 // ---- Overview ----
-function renderOverview(){
-  const b=$("#tabbody");
-  const bar=el("div","actionbar");
-  const act=(l,cls,fn)=>{const x=el("button",cls,l); x.onclick=fn; bar.append(x);};
-  act("Deploy","primary",()=>confirmAct("Deploy this stack (backup → snapshot → health-gate → rollback on failure)?","/api/deploy",{compose:current},"deploy"));
-  act("↻ Status","",()=>refreshStatus());
-  act("Back up","",()=>confirmAct("Run an application-consistent backup?","/api/backup",{compose:current},"backup"));
+function renderOverview(){const b=$("#tabbody");
+  const bar=el("div","bar");const act=(l,cls,fn)=>{const x=el("button","btn "+cls,l);x.onclick=fn;bar.append(x);};
+  act("Deploy","primary",()=>confirmAct("Deploy “"+stackName(current)+"”? Backs up, snapshots, health-gates, and rolls back on failure.","/api/deploy",{compose:current},"deploy"));
+  act("Refresh status","",()=>refreshStatus());
+  act("Back up","",()=>confirmAct("Run an application-consistent backup of “"+stackName(current)+"”?","/api/backup",{compose:current},"backup"));
   const trans={draft:["activate","archive"],active:["deprecate","archive"],deprecated:["activate","archive"],archived:["restore"]};
-  for(const ev of (trans[detail.lifecycle]||[])) act(ev[0].toUpperCase()+ev.slice(1),"",()=>doAct("/api/lifecycle",{compose:current,event:ev},"lifecycle "+ev).then(()=>selectStack(current,true)));
-  act("Down","danger",()=>confirmAct("Stop & remove this stack's containers (docker compose down)?","/api/down",{compose:current},"down"));
+  for(const ev of (trans[detail.lifecycle]||[]))act(ev[0].toUpperCase()+ev.slice(1),"",()=>doAct("/api/lifecycle",{compose:current,event:ev},"lifecycle "+ev).then(()=>selectStack(current,true)));
+  act("Down","danger",()=>confirmAct("Stop and remove this stack's containers (docker compose down)?","/api/down",{compose:current},"down",true));
   b.append(bar);
-  // issues
-  const isec=el("section"); const blocks=detail.guardrails.filter(g=>g.severity==="block"), warns=detail.guardrails.filter(g=>g.severity==="warn");
-  isec.append(el("h3",null,`Issues — ${blocks.length} blocking, ${warns.length} warning${warns.length===1?"":"s"}`));
-  if(!detail.guardrails.length) isec.append(el("div","clean","✓ No guardrail issues."));
-  for(const g of [...blocks,...warns]){ const r=el("div","issue "+g.severity); r.append(el("span","sev",g.severity)); const msg=el("span"); msg.append(el("span","src",g.service+" · ")); msg.append(document.createTextNode(g.message)); r.append(msg); isec.append(r); }
+  const blocks=detail.guardrails.filter(g=>g.severity==="block"),warns=detail.guardrails.filter(g=>g.severity==="warn");
+  const isec=el("section");isec.append(el("h3","sec",`Issues — ${blocks.length} blocking · ${warns.length} warning${warns.length===1?"":"s"}`));
+  if(!detail.guardrails.length)isec.append(clean("No guardrail issues."));
+  for(const g of [...blocks,...warns]){const r=el("div","issue "+g.severity);r.append(el("span","sev",g.severity));
+    const msg=el("span");msg.append(el("span","src",g.service+" · "));msg.append(document.createTextNode(g.message));r.append(msg);isec.append(r);}
   b.append(isec);
-  // services + status
-  const ssec=el("section"); ssec.append(el("h3",null,"Services"));
-  const tbl=el("table"); const hr=el("tr"); ["Service","Image","Kind","Status","CPU","Mem",""].forEach(h=>hr.append(el("th",null,h))); tbl.append(hr);
-  for(const s of detail.services){ const tr=el("tr");
-    tr.append(el("td",null,s.name)); tr.append(el("td","img",s.image||"—"));
-    const kd=el("td"); kd.append(el("span","kind "+s.kind,s.kind)); tr.append(kd);
-    const st=el("td","status"); st.dataset.svc=s.name; st.append(el("span","dim","—")); tr.append(st);
-    const cp=el("td","cpu img"); cp.dataset.svc=s.name; cp.textContent="—"; tr.append(cp);
-    const mm=el("td","mem img"); mm.dataset.svc=s.name; mm.textContent="—"; tr.append(mm);
-    const up=el("td"); const ub=el("button","","Upgrade…"); ub.onclick=()=>{const img=prompt(`New image for “${s.name}” (now: ${s.image||"?"}):`,s.image||""); if(img&&img!==s.image)confirmAct(`Upgrade ${s.name} to ${img}?`,"/api/upgrade",{compose:current,service:s.name,image:img},"upgrade "+s.name);}; up.append(ub); tr.append(up);
-    tbl.append(tr);
-  }
-  ssec.append(tbl); b.append(ssec);
-  refreshStatus();
-}
-function chip(cls,text,title){const s=el("span","stchip "+cls,text); if(title)s.title=title; return s;}
-async function refreshStatus(){
-  document.querySelectorAll("td.status").forEach(td=>{td.innerHTML=""; const s=el("span"); s.innerHTML='<span class="spin"></span>'; td.append(s);});
-  const [drift,upd,st]=await Promise.all([api("/api/drift?compose="+encodeURIComponent(current)).then(r=>r.data).catch(()=>({})),api("/api/updates?compose="+encodeURIComponent(current)).then(r=>r.data).catch(()=>({})),api("/api/stats?compose="+encodeURIComponent(current)).then(r=>r.data).catch(()=>({}))]);
-  const db={},ub={},sb={}; (drift.items||[]).forEach(i=>db[i.service]=i); (upd.items||[]).forEach(i=>ub[i.service]=i); (st.items||[]).forEach(i=>sb[i.service]=i);
-  document.querySelectorAll("td.cpu").forEach(td=>{const s=sb[td.dataset.svc]; td.textContent=(s&&s.cpu)||"—";});
-  document.querySelectorAll("td.mem").forEach(td=>{const s=sb[td.dataset.svc]; td.textContent=(s&&s.mem)||"—";});
-  document.querySelectorAll("td.status").forEach(td=>{const svc=td.dataset.svc; td.innerHTML="";
-    if(drift.available===false) td.append(chip("dim","drift ?","running-state unavailable"));
-    else { const di=db[svc]; if(!di)td.append(chip("ok","in sync")); else if(di.kind==="changed")td.append(chip("attn","drift",(di.declared||"")+" → "+(di.running||""))); else if(di.kind==="missing")td.append(chip("bad","not running")); else td.append(chip("attn",di.kind)); }
-    const u=ub[svc]; if(!u||u.status==="Unknown")td.append(chip("dim","update ?")); else if(u.status==="UpToDate")td.append(chip("ok","up-to-date")); else if(u.status==="UpdateAvailable")td.append(chip("attn","update","action: "+u.action)); else td.append(chip("dim",u.status));
-  });
-}
+  const ssec=el("section");ssec.append(el("h3","sec","Services"));
+  const tbl=el("table");const hr=el("tr");["Service","Image","Status","CPU","Mem",""].forEach(h=>hr.append(el("th",null,h)));tbl.append(hr);
+  for(const s of detail.services){const tr=el("tr");
+    tr.append(el("td",null,s.name));tr.append(el("td","m",s.image||"—"));
+    const st=el("td","status");st.dataset.svc=s.name;st.append(el("span","dim","—"));tr.append(st);
+    const cp=el("td","m cpu");cp.dataset.svc=s.name;cp.textContent="—";tr.append(cp);
+    const mm=el("td","m mem");mm.dataset.svc=s.name;mm.textContent="—";tr.append(mm);
+    const up=el("td");const ub=el("button","btn sm","Upgrade…");ub.onclick=()=>openUpgrade(tr,s);up.append(ub);tr.append(up);
+    tbl.append(tr);}
+  ssec.append(tbl);b.append(ssec);refreshStatus();}
+function clean(t){const c=el("div","clean");c.append(el("span","sig ok"));c.append(el("span",null,t));return c;}
 
-// ---- Compose editor ----
-async function renderCompose(){
-  const b=$("#tabbody");
-  const forCompose=current;
-  // Prefer an in-progress draft; otherwise load the saved compose and seed one.
-  let yaml=drafts[forCompose];
-  if(yaml===undefined){
-    const {data}=await api("/api/compose?compose="+encodeURIComponent(forCompose));
-    yaml=(data&&data.yaml)||""; drafts[forCompose]=yaml;
-  }
-  if(current!==forCompose) return; // user navigated away while we were loading
-  const row=el("div","editrow");
-  const main=el("div","col-main");
-  const ta=el("textarea","editor"); ta.id="editor"; ta.value=yaml; ta.spellcheck=false; main.append(ta);
-  const bar=el("div","actionbar"); bar.style.marginTop="12px";
-  const save=el("button","","Save (snapshot)"); save.onclick=()=>saveCompose(false); bar.append(save);
-  const saveDep=el("button","primary","Save & deploy"); saveDep.onclick=()=>saveCompose(true); bar.append(saveDep);
-  main.append(bar); row.append(main);
-  const side=el("div","validate"); side.id="vpanel"; side.append(el("div","muted","Validating…")); row.append(side);
+// inline upgrade (replaces prompt)
+function openUpgrade(row,s){if(row.nextSibling&&row.nextSibling.classList&&row.nextSibling.classList.contains("upg"))return;
+  const tr=el("tr","upg");const td=el("td");td.colSpan=6;
+  const f=el("div","bar");f.style.margin="4px 0";
+  const inp=el("input");inp.className="mono";inp.value=s.image||"";inp.style.cssText="flex:1;min-width:220px;font:13px/1 var(--mono);padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--sunken);color:var(--ink);";
+  const go=el("button","btn primary sm","Upgrade "+s.name);const cx=el("button","btn sm","Cancel");
+  go.onclick=()=>{const img=inp.value.trim();if(!img||img===s.image){cx.click();return;}
+    confirmAct("Upgrade “"+s.name+"” to "+img+"? Health-gated with automatic rollback.","/api/upgrade",{compose:current,service:s.name,image:img},"upgrade "+s.name).then(()=>tr.remove());};
+  cx.onclick=()=>tr.remove();
+  f.append(el("span","eyebrow","New image"));f.append(inp);f.append(go);f.append(cx);td.append(f);tr.append(td);
+  row.after(tr);inp.focus();inp.select();}
+
+function chip(cls,text,title){const s=el("span","chip "+cls,text);if(title)s.title=title;return s;}
+async function refreshStatus(){document.querySelectorAll("td.status").forEach(td=>{td.innerHTML='<span class="spin"></span>';});
+  const [drift,upd,st]=await Promise.all([
+    api("/api/drift?compose="+enc(current)).then(r=>r.data).catch(()=>({})),
+    api("/api/updates?compose="+enc(current)).then(r=>r.data).catch(()=>({})),
+    api("/api/stats?compose="+enc(current)).then(r=>r.data).catch(()=>({}))]);
+  const db={},ub={},sb={};(drift.items||[]).forEach(i=>db[i.service]=i);(upd.items||[]).forEach(i=>ub[i.service]=i);(st.items||[]).forEach(i=>sb[i.service]=i);
+  document.querySelectorAll("td.cpu").forEach(td=>{const s=sb[td.dataset.svc];td.textContent=(s&&s.cpu)||"—";});
+  document.querySelectorAll("td.mem").forEach(td=>{const s=sb[td.dataset.svc];td.textContent=(s&&s.mem)||"—";});
+  document.querySelectorAll("td.status").forEach(td=>{const svc=td.dataset.svc;td.innerHTML="";
+    if(drift.available===false)td.append(chip("dim","drift ?","running state unavailable"));
+    else{const di=db[svc];if(!di)td.append(chip("ok","in sync"));else if(di.kind==="changed")td.append(chip("warn","drift",(di.declared||"")+" → "+(di.running||"")));else if(di.kind==="missing")td.append(chip("bad","not running"));else td.append(chip("warn",di.kind));}
+    const u=ub[svc];if(!u||u.status==="Unknown")td.append(chip("dim","update ?"));else if(u.status==="UpToDate")td.append(chip("ok","up to date"));else if(u.status==="UpdateAvailable")td.append(chip("warn","update",u.action?("suggested: "+u.action):""));else td.append(chip("dim",u.status));});}
+
+// ---- Compose editor (draft buffer persists across tabs) ----
+async function renderCompose(){const b=$("#tabbody");const forC=current;
+  let yaml=drafts[forC];
+  if(yaml===undefined){const {data}=await api("/api/compose?compose="+enc(forC));yaml=(data&&data.yaml)||"";drafts[forC]=yaml;}
+  if(current!==forC)return;
+  const row=el("div","edit");const main=el("div","main");
+  const ta=el("textarea","editor");ta.id="editor";ta.value=yaml;ta.spellcheck=false;main.append(ta);
+  const bar=el("div","bar");bar.style.marginTop="12px";
+  const save=el("button","btn","Save snapshot");save.onclick=()=>saveCompose(false);
+  const sd=el("button","btn primary","Save & deploy");sd.onclick=()=>saveCompose(true);
+  bar.append(save);bar.append(sd);main.append(bar);row.append(main);
+  const side=el("div","vpanel");side.id="vpanel";side.append(el("div","head","Live check"));side.append(el("div","muted","Validating…"));row.append(side);
   b.append(row);
-  let t; ta.addEventListener("input",()=>{drafts[forCompose]=ta.value; clearTimeout(t); t=setTimeout(validateEditor,400);});
-  validateEditor();
-}
-async function validateEditor(){
-  const ed=$("#editor"), p=$("#vpanel"); if(!ed||!p) return; // navigated away before the debounce fired
-  const yaml=ed.value; p.innerHTML="";
-  const {data}=await post("/api/validate",{yaml});
-  p.append(el("div","v-badge "+"badge "+(data.ready?"ready":"notready"),data.ready?"READY":"NOT READY"));
-  p.append(el("div","muted",`${data.blocks} blocking · ${data.warns} warning${data.warns===1?"":"s"}`));
-  for(const g of (data.guardrails||[])){ const r=el("div","issue "+g.severity); r.style.marginTop="8px"; r.append(el("span","sev",g.severity)); const m=el("span"); m.append(el("span","src",g.service+" · ")); m.append(document.createTextNode(g.message)); r.append(m); p.append(r); }
-}
-async function saveCompose(deploy){
-  logLine("cmd","▶ save"+(deploy?" & deploy":""));
+  let t;ta.addEventListener("input",()=>{drafts[forC]=ta.value;clearTimeout(t);t=setTimeout(validateEditor,400);});
+  validateEditor();}
+async function validateEditor(){const ed=$("#editor"),p=$("#vpanel");if(!ed||!p)return;
+  const {data}=await post("/api/validate",{yaml:ed.value});
+  p.innerHTML="";p.append(el("div","head","Live check"));
+  p.append(el("span","pill "+(data.ready?"ready":"notready"),data.ready?"Ready":"Not ready"));
+  p.append(el("div","muted",`${data.blocks} blocking · ${data.warns} warning${data.warns===1?"":"s"}`));p.lastChild.style.margin="8px 0 4px";
+  for(const g of (data.guardrails||[])){const r=el("div","issue "+g.severity);r.style.marginTop="8px";r.append(el("span","sev",g.severity));
+    const m=el("span");m.append(el("span","src",g.service+" · "));m.append(document.createTextNode(g.message));r.append(m);p.append(r);}}
+async function saveCompose(deploy){logLine("cmd","▶ save"+(deploy?" & deploy":""));
   const {data}=await post("/api/save",{compose:current,yaml:$("#editor").value});
-  if(!data.ok){ logLine("bad","✗ "+(data.error||"save failed")); return; }
-  drafts[current]=$("#editor").value; // draft is now the saved truth
-  logLine("ok","✓ saved (snapshot "+((data.sha||"").slice(0,8))+")");
-  if(deploy) await doAct("/api/deploy",{compose:current},"deploy");
-  loadStacks();
-}
+  if(!data.ok){logLine("bad","✗ "+(data.error||"save failed"));toast("bad","Save failed");return;}
+  drafts[current]=$("#editor").value;logLine("ok","✓ saved (snapshot "+((data.sha||"").slice(0,8))+")");toast("ok","Saved");
+  if(deploy)await doAct("/api/deploy",{compose:current},"deploy");loadStacks();}
 
-// ---- History + diff ----
-async function renderHistory(){
-  const b=$("#tabbody");
-  const {data}=await api("/api/history?compose="+encodeURIComponent(current));
+// ---- Mounts (the connections/interfaces of the stack) ----
+async function renderMounts(){const b=$("#tabbody");b.append(el("p","muted","Reading connections…"));
+  const {data}=await api("/api/mounts?compose="+enc(current));b.innerHTML="";
+  b.append(el("p","muted","How each service connects to the outside — host binds, named/anonymous volumes, and networks — with type and existence."));
   const items=data.items||[];
-  if(!items.length){ b.append(el("p","muted","No snapshots yet — deploy or save the compose to start history.")); return; }
-  const ul=el("ul","hist");
-  items.forEach((it,i)=>{ const li=el("li");
-    li.append(el("span","sha",(it.sha||"").slice(0,8)));
-    li.append(el("span","msg",it.message||""));
-    const dbtn=el("button","","Diff vs current"); dbtn.onclick=()=>showDiff(it.sha,null); li.append(dbtn);
-    if(i+1<items.length){ const pd=el("button","","Diff vs prev"); pd.onclick=()=>showDiff(items[i+1].sha,it.sha); li.append(pd); }
-    const rb=el("button","danger","Restore"); rb.onclick=()=>confirmAct("Restore this version? Current state is snapshotted first; you can then redeploy from Overview.","/api/restore",{compose:current,sha:it.sha},"restore "+(it.sha||"").slice(0,8)).then(()=>{delete drafts[current]; selectStack(current,true);}); li.append(rb);
-    ul.append(li);
-  });
-  b.append(ul);
-  const dsec=el("section"); dsec.append(el("h3",null,"Diff")); const pre=el("pre","diff"); pre.id="diffout"; pre.append(el("span","dim","Pick a diff above.")); dsec.append(pre); b.append(dsec);
-}
-async function showDiff(from,to){
-  const pre=$("#diffout"); pre.innerHTML="Loading…";
-  let url="/api/diff?compose="+encodeURIComponent(current)+"&from="+encodeURIComponent(from); if(to)url+="&to="+encodeURIComponent(to);
-  const {data}=await api(url); pre.innerHTML="";
-  const d=(data.diff||"").trim(); if(!d){ pre.append(el("span","dim","(no differences)")); return; }
-  for(const line of d.split("\n")){ const cls=line.startsWith("+")&&!line.startsWith("+++")?"add":line.startsWith("-")&&!line.startsWith("---")?"del":line.startsWith("@@")||line.startsWith("diff ")?"hdr":""; pre.append(el("span",cls,line+"\n")); }
-}
-
-// ---- Mounts ----
-async function renderMounts(){
-  const b=$("#tabbody"); b.append(el("p","muted","Loading mounts…"));
-  const {data}=await api("/api/mounts?compose="+encodeURIComponent(current)); b.innerHTML="";
-  const items=data.items||[];
-  if(!items.length){ b.append(el("p","muted","No mounts declared in this stack.")); return; }
-  const tbl=el("table"); const hr=el("tr"); ["Service","Target","Source","Type","Exists","Fix"].forEach(h=>hr.append(el("th",null,h))); tbl.append(hr);
-  for(const m of items){ const tr=el("tr");
-    tr.append(el("td",null,m.service)); tr.append(el("td","img",m.target)); tr.append(el("td","img",m.source||"—"));
-    const kd=el("td"); const kc={"host-bind":"","named-volume":"proxy","anonymous":"datastore","network":"datastore"}[m.type]||""; kd.append(el("span","kind "+kc,m.type)); tr.append(kd);
-    const ex=el("td"); if(m.type!=="host-bind"||m.exists===null) ex.append(el("span","stchip dim","n/a")); else ex.append(m.exists?chip("ok","exists"):chip("bad","missing")); tr.append(ex);
-    const fx=el("td"); if(m.remediations&&m.remediations.length){ const bt=el("button","","Fix…"); bt.onclick=()=>{ const r=m.remediations[0]; alert(r.summary+(r.command?"\n\n"+r.command:"")); }; fx.append(bt);} else fx.append(el("span","dim","—")); tr.append(fx);
-    tbl.append(tr);
-  }
-  b.append(tbl);
-}
+  if(!items.length){b.append(el("p","muted","No mounts declared in this stack."));return;}
+  const tbl=el("table");const hr=el("tr");["Service","Target","Source","Type","Exists","Fix"].forEach(h=>hr.append(el("th",null,h)));tbl.append(hr);
+  for(const m of items){const tr=el("tr");
+    tr.append(el("td",null,m.service));tr.append(el("td","m",m.target));tr.append(el("td","m",m.source||"—"));
+    const kd=el("td");kd.append(el("span","type "+m.type,m.type));tr.append(kd);
+    const ex=el("td");if(m.type!=="host-bind"||m.exists===null)ex.append(el("span","chip dim","n/a"));else ex.append(m.exists?chip("ok","exists"):chip("bad","missing"));tr.append(ex);
+    const fx=el("td");if(m.remediations&&m.remediations.length){const bt=el("button","btn sm","Fix…");bt.onclick=()=>openFix(tr,m);fx.append(bt);}else fx.append(el("span","dim","—"));tr.append(fx);
+    tbl.append(tr);}
+  b.append(tbl);}
+function openFix(row,m){if(row.nextSibling&&row.nextSibling.classList&&row.nextSibling.classList.contains("fixr"))return;
+  const r=m.remediations[0];const tr=el("tr","fixr");const td=el("td");td.colSpan=6;
+  const box=el("div","form");box.style.cssText="margin:6px 0;max-width:none;box-shadow:none;";
+  box.append(el("div","eyebrow","Suggested fix"));box.append(el("div",null,r.summary));box.lastChild.style.margin="6px 0 10px";
+  if(r.command){const pre=el("div","preview");pre.textContent=r.command;box.append(pre);
+    const bar=el("div","bar");bar.style.marginTop="10px";const cp=el("button","btn sm","Copy command");
+    cp.onclick=()=>{navigator.clipboard.writeText(r.command);toast("ok","Copied");};const cx=el("button","btn sm","Close");cx.onclick=()=>tr.remove();
+    bar.append(cp);bar.append(cx);box.append(bar);}else{const cx=el("button","btn sm","Close");cx.onclick=()=>tr.remove();box.append(cx);}
+  td.append(box);tr.append(td);row.after(tr);}
 
 // ---- Permissions / compliance ----
-async function renderPermissions(){
-  const b=$("#tabbody"); b.append(el("p","muted","Checking compliance…"));
-  const {data}=await api("/api/permissions?compose="+encodeURIComponent(current)); b.innerHTML="";
-  b.append(el("div","badge "+(data.compliant?"ready":"notready"),data.compliant?"COMPLIANT":"NOT COMPLIANT"));
-  const f=data.findings||[];
-  if(!f.length){ b.append(el("div","clean","✓ No security or permission findings.")); return; }
-  const sec=el("section"); sec.append(el("h3",null,"Findings"));
-  for(const x of f){ const r=el("div","issue "+(x.severity==="block"?"block":"warn")); r.append(el("span","sev",x.severity)); const m=el("span"); m.append(el("span","src",x.service+" · "+x.rule+" · ")); m.append(document.createTextNode(x.message)); r.append(m); sec.append(r); }
-  b.append(sec);
-}
+async function renderPermissions(){const b=$("#tabbody");b.append(el("p","muted","Checking compliance…"));
+  const {data}=await api("/api/permissions?compose="+enc(current));b.innerHTML="";
+  b.append(el("span","pill "+(data.compliant?"ready":"notready"),data.compliant?"Compliant":"Not compliant"));
+  const f=data.findings||[];if(!f.length){b.append(clean("No security or permission findings."));return;}
+  const sec=el("section");sec.append(el("h3","sec","Findings"));
+  for(const x of f){const r=el("div","issue "+(x.severity==="block"?"block":"warn"));r.append(el("span","sev",x.severity));
+    const m=el("span");m.append(el("span","src",x.service+" · "+x.rule+" · "));m.append(document.createTextNode(x.message));r.append(m);sec.append(r);}
+  b.append(sec);}
+
+// ---- History + diff ----
+async function renderHistory(){const b=$("#tabbody");
+  const {data}=await api("/api/history?compose="+enc(current));const items=data.items||[];
+  if(!items.length){b.append(el("p","muted","No snapshots yet — save or deploy the compose to start history."));return;}
+  const ul=el("ul","hist");
+  items.forEach((it,i)=>{const li=el("li");li.append(el("span","sha",(it.sha||"").slice(0,8)));li.append(el("span","msg",it.message||""));
+    const d=el("button","btn sm","Diff vs current");d.onclick=()=>showDiff(it.sha,null);li.append(d);
+    if(i+1<items.length){const pd=el("button","btn sm","Diff vs prev");pd.onclick=()=>showDiff(items[i+1].sha,it.sha);li.append(pd);}
+    const rb=el("button","btn danger sm","Restore");rb.onclick=()=>confirmAct("Restore snapshot "+(it.sha||"").slice(0,8)+"? Current state is snapshotted first; redeploy from Overview after.","/api/restore",{compose:current,sha:it.sha},"restore "+(it.sha||"").slice(0,8),true).then(()=>{delete drafts[current];selectStack(current,true);});li.append(rb);
+    ul.append(li);});
+  b.append(ul);
+  const ds=el("section");ds.append(el("h3","sec","Diff"));const pre=el("pre","diff");pre.id="diffout";pre.append(el("span","dim","Pick a diff above."));ds.append(pre);b.append(ds);}
+async function showDiff(from,to){const pre=$("#diffout");pre.innerHTML="Loading…";
+  let url="/api/diff?compose="+enc(current)+"&from="+enc(from);if(to)url+="&to="+enc(to);
+  const {data}=await api(url);pre.innerHTML="";const d=(data.diff||"").trim();
+  if(!d){pre.append(el("span","dim","(no differences)"));return;}
+  for(const line of d.split("\n")){const cls=line.startsWith("+")&&!line.startsWith("+++")?"add":line.startsWith("-")&&!line.startsWith("---")?"del":line.startsWith("@@")||line.startsWith("diff ")?"hdr":"";pre.append(el("span",cls,line+"\n"));}}
 
 // ---- Backups ----
-async function renderBackups(){
-  const b=$("#tabbody");
-  const bar=el("div","actionbar"); const bk=el("button","primary","Back up now"); bk.onclick=()=>confirmAct("Run an application-consistent backup?","/api/backup",{compose:current},"backup").then(()=>renderShell()); bar.append(bk); b.append(bar);
-  const {data}=await api("/api/backups?compose="+encodeURIComponent(current));
-  const items=data.items||[];
-  if(!items.length){ b.append(el("p","muted","No recovery points yet — take a backup.")); return; }
-  const tbl=el("table"); const hr=el("tr"); ["Recovery point","Files","Integrity",""].forEach(h=>hr.append(el("th",null,h))); tbl.append(hr);
-  for(const it of items){ const tr=el("tr"); tr.append(el("td","img",it.name)); tr.append(el("td",null,String(it.entries)));
-    const v=el("td"); v.append(it.ok?chip("ok","verified"):chip("bad",it.issues+" issue"+(it.issues===1?"":"s"))); tr.append(v);
-    const act=el("td"); const rb=el("button","danger","Restore…"); rb.onclick=()=>{ if(confirm(`Restore data from “${it.name}”? This OVERWRITES the stack's current bind data (the backup is verified first).`)) doAct("/api/backup/restore",{compose:current,name:it.name},"restore data"); }; act.append(rb); tr.append(act);
-    tbl.append(tr); }
-  b.append(tbl);
-}
+async function renderBackups(){const b=$("#tabbody");
+  const bar=el("div","bar");const bk=el("button","btn primary","Back up now");bk.onclick=()=>confirmAct("Run an application-consistent backup?","/api/backup",{compose:current},"backup").then(()=>renderShell());bar.append(bk);b.append(bar);
+  const {data}=await api("/api/backups?compose="+enc(current));const items=data.items||[];
+  if(!items.length){b.append(el("p","muted","No recovery points yet — take a backup to create one."));return;}
+  const tbl=el("table");const hr=el("tr");["Recovery point","Files","Integrity",""].forEach(h=>hr.append(el("th",null,h)));tbl.append(hr);
+  for(const it of items){const tr=el("tr");tr.append(el("td","m",it.name));tr.append(el("td",null,String(it.entries)));
+    const v=el("td");v.append(it.ok?chip("ok","verified"):chip("bad",it.issues+" issue"+(it.issues===1?"":"s")));tr.append(v);
+    const ac=el("td");const rb=el("button","btn danger sm","Restore…");rb.onclick=()=>confirmAct("Restore data from “"+it.name+"”? This OVERWRITES the stack's current bind data (the backup is verified first).","/api/backup/restore",{compose:current,name:it.name},"restore data",true);ac.append(rb);tr.append(ac);
+    tbl.append(tr);}
+  b.append(tbl);}
 
 // ---- Logs ----
-async function renderLogs(){
-  const b=$("#tabbody");
-  const bar=el("div","actionbar"); const rf=el("button","","↻ Refresh"); rf.onclick=()=>loadLogs(); bar.append(rf); bar.append(el("span","muted","last 200 lines")); b.append(bar);
-  const pre=el("pre","diff"); pre.id="logout"; pre.append(el("span","dim","Loading…")); b.append(pre);
-  loadLogs();
-}
-async function loadLogs(){
-  const pre=$("#logout"); if(!pre)return; pre.innerHTML="Loading…";
-  const {data}=await api("/api/logs?compose="+encodeURIComponent(current)+"&tail=200");
-  pre.innerHTML=""; const out=((data.stdout||"")+(data.stderr||"")).trim();
-  pre.append(el("span",out?"":"dim",out||"(no output — is the stack running?)"));
-}
+async function renderLogs(){const b=$("#tabbody");
+  const bar=el("div","bar");const rf=el("button","btn sm","Refresh");rf.onclick=()=>loadLogs();bar.append(rf);bar.append(el("span","muted","last 200 lines"));b.append(bar);
+  const pre=el("pre","diff");pre.id="logout";pre.append(el("span","dim","Loading…"));b.append(pre);loadLogs();}
+async function loadLogs(){const pre=$("#logout");if(!pre)return;pre.innerHTML="Loading…";
+  const {data}=await api("/api/logs?compose="+enc(current)+"&tail=200");pre.innerHTML="";
+  const out=((data.stdout||"")+(data.stderr||"")).trim();pre.append(el("span",out?"":"dim",out||"(no output — is the stack running?)"));}
 
-// ---- Fleet overview (across all stacks) ----
-$("#fleet").onclick=()=>renderFleet(false);
-$("#notif").onclick=()=>renderFleet(true);
-async function renderFleet(attentionOnly){
-  current=null; renderRail();
-  await loadStacks(); // refresh cheap status
-  const m=$("#main"); m.innerHTML="";
-  m.append(el("h1",null,attentionOnly?"Needs attention":"Fleet"));
-  m.append(el("div","path",`${stacks.length} stack${stacks.length===1?"":"s"} under the served root · bulk actions run each through the guarded per-stack path`));
-  const bar=el("div","actionbar"); const b=(l,cls,fn)=>{const x=el("button",cls,l);x.onclick=fn;bar.append(x);};
-  b("Check all","",()=>doFleet("/api/fleet/check","check"));
-  b("Back up all","",()=>confirm("Back up every stack?")&&doFleet("/api/fleet/backup","backup"));
-  const unadopted=stacks.filter(s=>!s.adopted);
-  if(unadopted.length) b(`Adopt all (${unadopted.length})`,"primary",async()=>{ for(const s of unadopted){ await post("/api/adopt",{compose:s.compose}); } logLine("ok","✓ adopted "+unadopted.length+" stack(s)"); renderFleet(attentionOnly); });
+// ---- All stacks (fleet) ----
+$("#nav-all").onclick=()=>renderAll();
+function setNav(id){["nav-all","nav-git"].forEach(n=>$("#"+n).classList.toggle("on",n===id));}
+async function renderAll(){current=null;setNav("nav-all");renderRail();await loadStacks();
+  const m=$("#main");m.innerHTML="";
+  m.append(el("div","eyebrow","Fleet"));
+  const h=el("div","dhead");h.append(el("h1",null,"All stacks"));m.append(h);
+  m.append(el("p","muted",`Every stack under the served root. Check guardrails or back up all of them at once, and adopt newly-discovered stacks so Yard Dog manages them. ${stacks.length} stack${stacks.length===1?"":"s"} found.`));
+  const bar=el("div","bar");bar.style.marginTop="14px";const B=(l,cls,fn)=>{const x=el("button","btn "+cls,l);x.onclick=fn;bar.append(x);};
+  B("Check all","",()=>doFleet("/api/fleet/check","check"));
+  B("Back up all","",()=>confirmAct("Back up every stack under the served root?","/api/fleet/backup",{},"backup all").then(r=>fleetResults(r)));
+  const un=stacks.filter(s=>!s.adopted);
+  if(un.length)B(`Adopt all (${un.length})`,"primary",()=>askConfirm("Adopt "+un.length+" unmanaged stack"+(un.length===1?"":"s")+" into Yard Dog?").then(async ok=>{if(!ok)return;for(const s of un)await post("/api/adopt",{compose:s.compose});logLine("ok","✓ adopted "+un.length+" stack(s)");toast("ok","Adopted "+un.length);renderAll();}));
   m.append(bar);
-  const rows=stacks.filter(s=>!attentionOnly||s.blocks>0||!s.adopted);
-  const tbl=el("table"); const hr=el("tr"); ["Stack","Lifecycle","Issues","Managed","Status",""].forEach(h=>hr.append(el("th",null,h))); tbl.append(hr);
-  for(const s of rows){ const tr=el("tr");
-    const nm=el("td"); const link=el("button","",s.name); link.style.padding="2px 0"; link.style.border="none"; link.style.background="none"; link.onclick=()=>selectStack(s.compose); nm.append(link); tr.append(nm);
-    const lc=el("td"); lc.append(el("span","chip "+s.lifecycle,s.lifecycle)); tr.append(lc);
-    const iss=el("td"); if(s.blocks>0)iss.append(el("span","badge-issue block",s.blocks+"⚠")); else if(s.warns>0)iss.append(el("span","badge-issue warn",s.warns)); else iss.append(el("span","badge-issue ok","✓")); tr.append(iss);
-    const mg=el("td"); mg.append(s.adopted?el("span","stchip ok","managed"):el("span","stchip attn","unadopted")); tr.append(mg);
-    const st=el("td","fstat"); st.dataset.compose=s.compose; st.append(el("span","dim","—")); tr.append(st);
-    const act=el("td"); if(!s.adopted){ const ab=el("button","","Adopt"); ab.onclick=()=>post("/api/adopt",{compose:s.compose}).then(()=>{logLine("ok","✓ adopted "+s.name);renderFleet(attentionOnly);}); act.append(ab);} tr.append(act);
-    tbl.append(tr);
-  }
+  const tbl=el("table");const hr=el("tr");["","Stack","Lifecycle","Issues","Managed","Status",""].forEach(h=>hr.append(el("th",null,h)));tbl.append(hr);
+  for(const s of stacks){const tr=el("tr");
+    tr.append((()=>{const td=el("td");td.append(el("span","sig "+stackSig(s)));return td;})());
+    const nm=el("td");const lk=el("button","btn sm",s.name);lk.style.cssText="border:none;background:none;padding:2px 0;color:var(--accent-ink);font-weight:650;";lk.onclick=()=>selectStack(s.compose);nm.append(lk);tr.append(nm);
+    const lc=el("td");lc.append(el("span","chip",s.lifecycle));tr.append(lc);
+    const is=el("td");if(s.blocks>0)is.append(chip("bad",s.blocks+" blocking"));else if(s.warns>0)is.append(chip("warn",s.warns+" warn"));else is.append(chip("ok","clean"));tr.append(is);
+    const mg=el("td");mg.append(s.adopted?chip("ok","managed"):chip("warn","unadopted"));tr.append(mg);
+    const st=el("td","fstat");st.dataset.compose=s.compose;st.append(el("span","dim","—"));tr.append(st);
+    const ac=el("td");if(!s.adopted){const ab=el("button","btn sm","Adopt");ab.onclick=()=>post("/api/adopt",{compose:s.compose}).then(()=>{logLine("ok","✓ adopted "+s.name);toast("ok","Adopted "+s.name);renderAll();});ac.append(ab);}tr.append(ac);
+    tbl.append(tr);}
   m.append(tbl);
-  const c=el("section","console"); c.append(el("h3",null,"Output")); const pre=el("pre"); pre.id="console"; renderConsole(pre); c.append(pre); m.append(c);
-  // lazily load expensive status (drift/updates) per row
-  for(const s of rows) loadFleetStatus(s.compose);
-}
-async function loadFleetStatus(compose){
-  const td=document.querySelector(`td.fstat[data-compose="${CSS.escape(compose)}"]`); if(!td)return;
-  const [drift,upd]=await Promise.all([api("/api/drift?compose="+encodeURIComponent(compose)).then(r=>r.data).catch(()=>({})),api("/api/updates?compose="+encodeURIComponent(compose)).then(r=>r.data).catch(()=>({}))]);
-  td.innerHTML="";
-  const dc=(drift.items||[]).length; const uc=(upd.items||[]).filter(i=>i.status==="UpdateAvailable").length;
-  if(drift.available===false) td.append(chip("dim","docker?"));
-  else td.append(dc?chip("attn",dc+" drift"):chip("ok","in sync"));
-  if(uc) td.append(chip("attn",uc+" update"+(uc===1?"":"s")));
-}
-async function doFleet(path,label){
-  logLine("cmd","▶ fleet "+label);
-  const {data}=await post(path,{});
-  for(const r of (data.results||[])) logLine(r.ok?"ok":"bad",(r.ok?"✓ ":"✗ ")+r.stack+" — "+(r.summary||""));
-  loadStacks();
-}
+  for(const s of stacks)loadFleetStatus(s.compose);}
+async function loadFleetStatus(compose){const td=document.querySelector(`td.fstat[data-compose="${CSS.escape(compose)}"]`);if(!td)return;
+  const [drift,upd]=await Promise.all([api("/api/drift?compose="+enc(compose)).then(r=>r.data).catch(()=>({})),api("/api/updates?compose="+enc(compose)).then(r=>r.data).catch(()=>({}))]);
+  td.innerHTML="";const dc=(drift.items||[]).length,uc=(upd.items||[]).filter(i=>i.status==="UpdateAvailable").length;
+  if(drift.available===false)td.append(chip("dim","docker?"));else td.append(dc?chip("warn",dc+" drift"):chip("ok","in sync"));
+  if(uc)td.append(chip("warn",uc+" update"+(uc===1?"":"s")));}
+async function doFleet(path,label){logLine("cmd","▶ fleet "+label);const {data}=await post(path,{});fleetResults({data});}
+function fleetResults(r){const data=(r&&r.data)||{};for(const x of (data.results||[]))logLine(x.ok?"ok":"bad",(x.ok?"✓ ":"✗ ")+x.stack+" — "+(x.summary||""));toast("ok","Fleet action done");loadStacks();}
 
-// ---- Git remote sync (monorepo-wide) ----
-$("#git").onclick=renderGit;
-async function renderGit(){
-  current=null; renderRail();
-  const m=$("#main"); m.innerHTML="";
-  m.append(el("h1",null,"Git remote sync"));
-  m.append(el("div","path","One repo at the served root · authentication uses your system git (credential helper / SSH) — no tokens are stored here"));
+// ---- Git (proper connect form; no prompts) ----
+$("#nav-git").onclick=()=>renderGit();
+function updateGitSig(){api("/api/git").then(({data})=>{const s=$("#git-sig");s.className="sig "+(data&&data.remote?"ok":"");});}
+async function renderGit(){current=null;setNav("nav-git");renderRail();const m=$("#main");m.innerHTML="";
+  m.append(el("div","eyebrow","Config sync"));
+  const h=el("div","dhead");h.append(el("h1",null,"Git remote"));m.append(h);
   const {data}=await api("/api/git");
-  const status=el("div","actionbar");
-  if(data.remote){ status.append(el("span","chip active","connected")); status.append(el("span","img",data.remote)); if(data.ahead>=0) status.append(el("span","muted",`${data.ahead} ahead · ${data.behind} behind`)); }
-  else status.append(el("span","chip","not connected"));
-  m.append(status);
-  const bar=el("div","actionbar"); const b=(l,cls,fn)=>{const x=el("button",cls,l);x.onclick=fn;bar.append(x);};
-  b(data.remote?"Change remote…":"Connect a remote…","primary",()=>{const url=prompt("Git remote URL (https://… or git@…):",data.remote||"");if(url)doGit("/api/git/connect",{url},"connect").then(renderGit);});
-  if(data.remote){
-    b("Push","",()=>doGit("/api/git/push",{},"push").then(renderGit));
-    b("Pull","",()=>doGit("/api/git/pull",{},"pull").then(renderGit));
-  }
-  m.append(bar);
-  const c=el("section","console"); c.append(el("h3",null,"Output")); const pre=el("pre"); pre.id="console"; renderConsole(pre); c.append(pre); m.append(c);
-}
-async function doGit(path,body,label){
-  logLine("cmd","▶ git "+label);
-  const {data}=await post(path,body);
-  if(data.error){ logLine("bad","✗ "+data.error); return; }
-  if(data.stdout&&data.stdout.trim()) logLine("",data.stdout.trim());
-  if(data.stderr&&data.stderr.trim()) logLine("bad",data.stderr.trim());
-  logLine(data.ok?"ok":"bad",data.ok?"✓ done":"✗ failed");
-}
+  const box=el("div","form");box.style.marginTop="14px";
+  const status=el("div","bar");status.style.marginBottom="14px";
+  if(data.remote){status.append(el("span","pill ready","Connected"));status.append(el("span","chip","")); status.lastChild.remove();
+    const u=el("span","chip");u.className="chip";u.textContent=data.remote;status.append(u);
+    if(data.ahead>=0)status.append(el("span","muted",`${data.ahead} ahead · ${data.behind} behind`));}
+  else status.append(el("span","pill notready","Not connected"));
+  box.append(status);
+  const f=el("div","field");f.append(el("label",null,"Remote URL"));
+  const inp=el("input");inp.placeholder="https://github.com/you/config.git  or  git@github.com:you/config.git";inp.value=data.remote||"";f.append(inp);
+  f.append(el("div","hint","Sign-in uses your system Git credentials — a credential helper for HTTPS, or your SSH key. Yard Dog never stores tokens. One repo at the served root holds all stack config."));
+  box.append(f);
+  const bar=el("div","bar");
+  const cn=el("button","btn primary",data.remote?"Update remote":"Connect");cn.onclick=()=>{const url=inp.value.trim();if(!url){toast("bad","Enter a remote URL");return;}doGit("/api/git/connect",{url},"connect").then(renderGit);};
+  bar.append(cn);
+  if(data.remote){const ps=el("button","btn","Push");ps.onclick=()=>doGit("/api/git/push",{},"push").then(renderGit);
+    const pl=el("button","btn","Pull");pl.onclick=()=>doGit("/api/git/pull",{},"pull").then(renderGit);bar.append(ps);bar.append(pl);}
+  box.append(bar);m.append(box);}
+async function doGit(path,body,label){logLine("cmd","▶ git "+label);const {data}=await post(path,body);
+  if(data.error){logLine("bad","✗ "+data.error);toast("bad","Git "+label+" failed");return;}
+  if(data.stdout&&data.stdout.trim())logLine("",data.stdout.trim());
+  if(data.stderr&&data.stderr.trim())logLine("bad",data.stderr.trim());
+  logLine(data.ok?"ok":"bad",data.ok?"✓ done":"✗ failed");if(data.ok)toast("ok","Git "+label);updateGitSig();}
 
 // ---- actions ----
-async function confirmAct(msg,path,body,label){ if(!confirm(msg))return; return doAct(path,body,label); }
-async function doAct(path,body,label){
-  logLine("cmd","▶ yd "+label);
-  const {data}=await post(path,body);
-  if(data.error){ logLine("bad","✗ "+data.error); return; }
-  if(data.stdout&&data.stdout.trim()) logLine("",data.stdout.trimEnd());
-  if(data.stderr&&data.stderr.trim()) logLine("dim",data.stderr.trimEnd());
-  if("ok" in data) logLine(data.ok?"ok":"bad",(data.ok?"✓ done":"✗ failed")+(data.exit!=null?" (exit "+data.exit+")":""));
-  loadStacks();
-}
+async function confirmAct(msg,path,body,label,danger){if(!await askConfirm(msg,"Confirm",danger))return;return doAct(path,body,label);}
+async function doAct(path,body,label){logLine("cmd","▶ yd "+label);const {data}=await post(path,body);
+  if(data.error){logLine("bad","✗ "+data.error);toast("bad",label+" failed");return;}
+  if(data.stdout&&data.stdout.trim())logLine("",data.stdout.trimEnd());
+  if(data.stderr&&data.stderr.trim())logLine("dim",data.stderr.trimEnd());
+  if("ok" in data){logLine(data.ok?"ok":"bad",(data.ok?"✓ done":"✗ failed")+(data.exit!=null?" (exit "+data.exit+")":""));toast(data.ok?"ok":"bad",label+(data.ok?" done":" failed"));}
+  loadStacks();}
 
-// ---- new stack ----
-$("#newstack").onclick=async ()=>{
-  const name=prompt("New stack name (a directory under the served root):"); if(!name)return;
-  const kind=(prompt("Workload kind (datastore/web/worker/cron/proxy) — or blank:","web")||"").trim();
-  const tmpl=kind?templateFor(kind,name):`services:\n  ${name}:\n    image: \n    restart: unless-stopped\n`;
-  const rel=name.replace(/\\/g,"/").replace(/\/+$/,"")+"/docker-compose.yml";
-  stacks.unshift({name,compose:rel,lifecycle:"draft",services:0,blocks:0,warns:0});
-  current=rel; tab="compose"; drafts[rel]=tmpl; renderRail();
-  $("#main").innerHTML=""; detail={compose:rel,lifecycle:"draft",ready:true,blocks:0,warns:0,services:[],guardrails:[]}; renderShell();
-};
-function templateFor(kind,svc){
-  const img={datastore:"postgres:16",web:"nginx:1.27-alpine",proxy:"traefik:3.1",worker:"alpine:3.20",cron:"alpine:3.20"}[kind]||"alpine:3.20";
-  let y=`# kind: ${kind}\nservices:\n  ${svc}:\n    image: ${img}\n    restart: unless-stopped\n    mem_limit: 256m\n    healthcheck:\n      test: ["CMD", "true"]  # TODO real healthcheck\n      interval: 30s\n`;
-  if(kind==="datastore") y+=`    volumes:\n      - ${svc}-data:/var/lib/${svc}\nvolumes:\n  ${svc}-data:\n`;
-  return y;
-}
+// ---- new stack (inline panel; no prompts, no kind) ----
+$("#newstack").onclick=()=>{current=null;setNav(null);renderRail();const m=$("#main");m.innerHTML="";
+  m.append(el("div","eyebrow","New stack"));const h=el("div","dhead");h.append(el("h1",null,"Create a stack"));m.append(h);
+  const box=el("div","form");box.style.marginTop="14px";
+  const f=el("div","field");f.append(el("label",null,"Name"));
+  const inp=el("input");inp.placeholder="e.g. media-server";f.append(inp);
+  f.append(el("div","hint","Creates a directory under the served root with a starter docker-compose.yml. Edit it in the Compose tab, then Save & deploy."));box.append(f);
+  const pv=el("div","field");pv.append(el("label",null,"Starter compose"));const prev=el("div","preview");prev.textContent=template("your-service");pv.append(prev);box.append(pv);
+  inp.addEventListener("input",()=>{prev.textContent=template(inp.value.trim()||"your-service");});
+  const bar=el("div","bar");const create=el("button","btn primary","Create stack");
+  create.onclick=()=>{const name=inp.value.trim();if(!name){toast("bad","Enter a name");return;}
+    const rel=name.replace(/\\/g,"/").replace(/\/+$/,"")+"/docker-compose.yml";
+    stacks.unshift({name,compose:rel,lifecycle:"draft",services:0,blocks:0,warns:0,adopted:false});
+    drafts[rel]=template(name);current=rel;tab="compose";
+    detail={compose:rel,lifecycle:"draft",ready:true,services:[],guardrails:[]};renderRail();renderShell();toast("ok","Draft created — edit and save");};
+  const cx=el("button","btn","Cancel");cx.onclick=()=>{$("#main").innerHTML="";$("#main").append(emptyState());};
+  bar.append(create);bar.append(cx);box.append(bar);m.append(box);inp.focus();};
+function template(svc){return `services:\n  ${svc}:\n    image: \n    restart: unless-stopped\n    mem_limit: 256m\n    healthcheck:\n      test: ["CMD", "true"]   # replace with a real check\n      interval: 30s\n`;}
+
+function emptyState(){const d=el("div","empty");
+  d.innerHTML='<svg class="big" viewBox="0 0 34 28" fill="none"><rect x="1.5" y="7" width="24" height="14" rx="2" stroke="currentColor" stroke-width="2"/><path d="M7 7v14M12.5 7v14M18 7v14" stroke="currentColor" stroke-width="1.4" opacity=".6"/><path d="M25.5 11h4.2l2.8 3.2V21h-7z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
+  d.append(el("h2",null,"Pick a stack"));
+  d.append(el("p",null,"Choose a stack on the left to inspect its issues, connections, and history — or create a new one. Everything yd runs prints to the console below."));
+  return d;}
+
+// ---- init ----
+$("#main").append(emptyState());
 loadStacks();
 </script>
 </body>

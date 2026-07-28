@@ -12,7 +12,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('new stack: typed compose survives a tab round-trip (the reported bug)', async ({ page }) => {
-  await newStack(page, 'brand-new', 'web');
+  await newStack(page, 'brand-new');
 
   const marker = 'services:\n  brand-new:\n    image: nginx:1.27-alpine  # MY-EDIT-MARKER\n';
   await page.locator('#editor').fill(marker);
