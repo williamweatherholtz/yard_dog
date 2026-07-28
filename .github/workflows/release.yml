@@ -86,40 +86,87 @@ jobs:
           name: linux-packages
           path: out/*
 
-  # Build + push the multi-arch control-plane image (arm64 first) to GHCR, so
-  # `docker compose up -d` (packaging/docker/) pulls a real image. Tags the
-  # version and `latest`. See issContainerCiPublish / decShipContainerImage.
-  docker-publish:
-    runs-on: ubuntu-latest
+  # Build the control-plane image for each arch NATIVELY (no QEMU) and push each
+  # by digest; a separate job merges them into one multi-arch tag. Native arm64
+  # (ubuntu-24.04-arm) avoids the ~40-min emulated Rust compile the single-job
+  # QEMU build incurred. See issContainerBuildSlow / issContainerCiPublish.
+  docker-image:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04-arm
+            arch: arm64
+          - os: ubuntu-latest
+            arch: amd64
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+      - name: Image repo (lowercase owner)
+        id: repo
+        shell: bash
+        run: echo "img=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/yard-dog" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Image tags
-        id: tags
-        shell: bash
-        run: |
-          repo_lc="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
-          img="ghcr.io/${repo_lc}/yard-dog"
-          echo "tags=${img}:${GITHUB_REF_NAME#v},${img}:latest" >> "$GITHUB_OUTPUT"
-      - name: Build + push (arm64 + amd64)
+      - name: Build + push by digest (native)
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: packaging/docker/Dockerfile
-          platforms: linux/arm64,linux/amd64
-          push: true
-          tags: ${{ steps.tags.outputs.tags }}
+          platforms: linux/${{ matrix.arch }}
           provenance: false
+          outputs: type=image,name=${{ steps.repo.outputs.img }},push-by-digest=true,name-canonical=true,push=true
+      - name: Export digest
+        shell: bash
+        run: |
+          mkdir -p /tmp/digests
+          echo -n "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.arch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-digest-${{ matrix.arch }}
+          path: /tmp/digests/${{ matrix.arch }}
+          retention-days: 1
+
+  # Combine the per-arch digests into ghcr.io/.../yard-dog:{version,latest}.
+  docker-manifest:
+    needs: docker-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - name: Image repo (lowercase owner)
+        id: repo
+        shell: bash
+        run: echo "img=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/yard-dog" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: image-digest-*
+          merge-multiple: true
+      - name: Create + push multi-arch manifest (version + latest)
+        shell: bash
+        run: |
+          IMG='${{ steps.repo.outputs.img }}'
+          VER="${GITHUB_REF_NAME#v}"
+          REFS=""
+          for f in /tmp/digests/*; do REFS="$REFS ${IMG}@$(cat "$f")"; done
+          docker buildx imagetools create -t "${IMG}:${VER}" -t "${IMG}:latest" $REFS
+          docker buildx imagetools inspect "${IMG}:${VER}"
 
   release:
     needs: [build, package]

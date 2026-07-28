@@ -86,6 +86,17 @@ package YardDogInstallIssues {
         :>> severity = Severity::Medium;
     }
 
+    // -- image build is slow/fragile under emulation (Sprint 55) --------------
+    part issContainerBuildSlow : Issue {
+        :>> id = "73e81c1d-0c12-41c8-89e0-b365fb5e3394";
+        :>> title = "Container image build takes ~40 min because arm64 compiles from source under QEMU";
+        :>> createdAt = "2026-07-27";
+        :>> createdBy = "wweatherholtz";
+        :>> description = "The first docker-publish job used a single runner with docker/setup-qemu-action and `platforms: linux/arm64,linux/amd64`, so the arm64 image compiled the Rust binary (bollard/tokio/ring) under EMULATION — ~40 min wall-clock for v0.1.4, and emulated builds are flaky. Fix: build each arch NATIVELY on its own runner (ubuntu-24.04-arm for arm64, ubuntu-latest for amd64), push each by digest, and merge into one multi-arch tag with `docker buildx imagetools create`. No QEMU; per-arch build drops to a couple of minutes. Local `docker compose build` keeps building from source unchanged. Velocity/reliability, not correctness — the v0.1.4 image did publish correctly, just slowly.";
+        :>> discoveredInField = true;
+        :>> severity = Severity::Medium;
+    }
+
     // -- triage: resolver per issue -------------------------------------------
     action fixInstallScript;
     action fixInstallLinuxPkg;
@@ -94,6 +105,7 @@ package YardDogInstallIssues {
     action decideContainerImage;
     action fixReleaseArchGaps;
     action fixContainerCiPublish;
+    action fixContainerBuildSlow;
 
     #Resolves dependency from fixInstallScript to issInstallScript;
     #Resolves dependency from fixInstallLinuxPkg to issInstallLinuxPkg;
@@ -102,4 +114,5 @@ package YardDogInstallIssues {
     #Resolves dependency from decideContainerImage to issContainerImage;
     #Resolves dependency from fixReleaseArchGaps to issReleaseArchGaps;
     #Resolves dependency from fixContainerCiPublish to issContainerCiPublish;
+    #Resolves dependency from fixContainerBuildSlow to issContainerBuildSlow;
 }
