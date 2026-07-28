@@ -64,6 +64,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: staging
+          pattern: yd-*-linux   # only the linux binaries; ignore image-digest/dockerbuild
       - name: Build .deb + .rpm (amd64 + arm64)
         shell: bash
         run: |
@@ -118,6 +119,8 @@ jobs:
       - name: Build + push by digest (native)
         id: build
         uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_SUMMARY: "false"   # no .dockerbuild provenance artifacts
         with:
           context: .
           file: packaging/docker/Dockerfile
@@ -172,9 +175,14 @@ jobs:
     needs: [build, package]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4   # the prebuilt binaries
         with:
           path: staging
+          pattern: yd-*
+      - uses: actions/download-artifact@v4   # the .deb/.rpm packages
+        with:
+          name: linux-packages
+          path: staging/linux-packages
       - name: Collect binaries + checksums
         shell: bash
         run: |
