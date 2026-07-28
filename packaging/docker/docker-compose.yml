@@ -14,15 +14,35 @@
 # CHANGE THE PORT any time: set YD_PORT (below or in a .env file) and re-run
 # `docker compose up -d`. Set YD_ROOT to the directory that holds your stacks.
 
+# A stable project name so `docker compose` groups/labels resources predictably
+# regardless of the directory this file lives in.
+name: yard-dog
+
 services:
   yard-dog:
-    image: ghcr.io/williamweatherholtz/yard-dog:latest
+    image: ghcr.io/williamweatherholtz/yard-dog:latest   # :latest is intentional — pairs with `yd self-update`; pin a version/digest if you prefer reproducible pulls
     # Prefer building locally over pulling? `docker compose build` uses this:
     build:
       context: ../..
       dockerfile: packaging/docker/Dockerfile
     container_name: yard-dog
     restart: unless-stopped          # auto-run: comes back on failure and on boot
+    # Prevent in-container privilege escalation (setuid/setgid). Safe here — yd,
+    # the docker CLI, and git don't rely on it. NOTE: we deliberately do NOT add
+    # `cap_drop: [ALL]` / a non-root `user:` / `read_only: true`: yd's job is to
+    # read arbitrary HOST paths as root (dropping DAC_OVERRIDE would break reading
+    # other-owned bind dirs) and the bundled docker/git CLIs write to $HOME. See the
+    # commented hardening block below to opt in after testing on your host.
+    security_opt:
+      - no-new-privileges:true
+    # Bound log growth so the control plane can't fill the host disk over months.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Give the server (and any open PTY sessions) a moment to exit cleanly.
+    stop_grace_period: 30s
     environment:
       YD_ROOT: ${YD_ROOT:-/srv/stacks}
       YD_PORT: ${YD_PORT:-8770}
@@ -39,3 +59,25 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       # 2) your stacks dir, mounted at the SAME path so host bind paths resolve
       - ${YD_ROOT:-/srv/stacks}:${YD_ROOT:-/srv/stacks}
+
+    # ---- optional hardening (opt in AFTER testing on your host) ----------------
+    # Cap memory so a runaway can't starve the host. yd is a lightweight Rust
+    # binary; the docker/compose CLIs it spawns mostly stream (the real work runs in
+    # the daemon). Raise if a large backup with very chatty output gets OOM-killed.
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 512M
+    #
+    # Read-only root filesystem + writable tmpfs for the CLIs' scratch dirs. This is
+    # the strongest hardening but needs testing: git and the docker CLI write under
+    # $HOME (/root) and /tmp, so those MUST be tmpfs or the tools break.
+    # read_only: true
+    # tmpfs:
+    #   - /tmp
+    #   - /root
+    #
+    # Strongest socket hardening: instead of mounting the raw docker.sock, front the
+    # daemon with a docker-socket-proxy that allow-lists only the API calls yd needs
+    # (containers/exec/images/volumes/networks) — shrinks the blast radius of the
+    # host-root-equivalent socket. See tecnativa/docker-socket-proxy.
