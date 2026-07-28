@@ -59,13 +59,23 @@ fn action_path(a: &FixAction) -> &str {
     }
 }
 
-/// True for an exact critical system root (after normalising separators + a
-/// trailing slash).
+/// True for a critical system root. Normalises separators AND lexically resolves
+/// `.`/`..`/duplicate slashes first, so `/etc/.`, `//etc`, and `/etc/../etc` are
+/// all recognised as `/etc` (the string-level bypass the first version missed).
 pub fn is_protected_path(path: &str) -> bool {
-    let n = path.replace('\\', "/");
-    let n = n.trim_end_matches('/');
-    let n = if n.is_empty() { "/" } else { n };
-    PROTECTED_PATHS.contains(&n)
+    let s = path.replace('\\', "/");
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in s.split('/') {
+        match seg {
+            "" | "." => {}            // dedupe slashes, drop current-dir
+            ".." => {
+                parts.pop();
+            } // resolve parent lexically
+            _ => parts.push(seg),
+        }
+    }
+    let norm = format!("/{}", parts.join("/"));
+    PROTECTED_PATHS.contains(&norm.as_str())
 }
 
 pub fn apply_fix(action: &FixAction, confirmed: bool, fs: &dyn HostFsMut) -> ApplyOutcome {
@@ -225,7 +235,8 @@ mod tests {
     #[test]
     fn refuses_protected_system_paths_even_when_confirmed() {
         let fs = RecordingFs::default();
-        for p in ["/etc", "/", "/var/run", "/usr/bin", "/etc/"] {
+        // includes non-canonical bypass forms that the string-match missed before
+        for p in ["/etc", "/", "/var/run", "/usr/bin", "/etc/", "/etc/.", "//etc", "/etc/../etc", "/./etc", "/etc/../.."] {
             let action = FixAction::Chown { path: p.into(), uid: 0, gid: 0 };
             assert!(
                 matches!(apply_fix(&action, true, &fs), ApplyOutcome::Failed(_)),

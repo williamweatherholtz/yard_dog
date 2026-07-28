@@ -20,15 +20,18 @@ const GITIGNORE: &str = "# Yard Dog: never version data or secrets\n\
 *.env\n\
 *.secret\n\
 secrets/\n\
-*/data/\n\
-*/db/\n\
-*/pgdata/\n\
-*/*/data/\n\
-*/*/db/\n\
-*/*/pgdata/\n\
+# data directories at ANY depth (not just 1-2 levels) — else deep layouts leak\n\
+**/data/\n\
+**/db/\n\
+**/pgdata/\n\
+**/mysql/\n\
+**/postgres/\n\
+**/redis/\n\
 *.sqlite\n\
 *.sqlite3\n\
-*.db\n";
+*.db\n\
+*.rdb\n\
+*.mdb\n";
 
 const GITATTRIBUTES: &str = "* text=auto eol=lf\n";
 

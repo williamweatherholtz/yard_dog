@@ -108,6 +108,13 @@ pub fn run(
         return Ok(Outcome::Blocked(blockers.join("; ")));
     }
 
+    // A compose with no services is not a deploy — don't report success for it.
+    if crate::workload::parse_services(&effective).is_empty() {
+        return Ok(Outcome::Blocked(
+            "no services declared — nothing to deploy".into(),
+        ));
+    }
+
     // Recovery point first — abort if it fails, before anything is changed.
     trace.push(Phase::Backup);
     if let Err(e) = backup.pre_change_backup(stack_dir) {
@@ -162,13 +169,25 @@ pub fn run(
         Ok(()) => "healthy but not accepted".to_string(),
         Err(e) => e.to_string(),
     };
-    if let Some(good) = prior {
-        gitver::restore_scoped(change.repo, &rel, &good)?;
-        if let Err(e) = deployer.deploy(stack_dir) {
-            return Ok(Outcome::RegressFailed(format!(
-                "{reason}; rollback redeploy failed: {e}"
-            )));
-        }
+    // No last-good snapshot to restore (e.g. the FIRST deploy of a stack). We
+    // cannot return the running stack to a good version, so we must NOT claim a
+    // clean rollback — the failed change is live and needs attention (exit 4).
+    let Some(good) = prior else {
+        return Ok(Outcome::RegressFailed(format!(
+            "{reason}; no prior snapshot to roll back to — the failed change is still live"
+        )));
+    };
+    // A restore that itself errors is also a failed rollback (exit 4), not a
+    // generic error and not a clean roll.
+    if let Err(e) = gitver::restore_scoped(change.repo, &rel, &good) {
+        return Ok(Outcome::RegressFailed(format!(
+            "{reason}; rollback restore failed: {e}"
+        )));
+    }
+    if let Err(e) = deployer.deploy(stack_dir) {
+        return Ok(Outcome::RegressFailed(format!(
+            "{reason}; rollback redeploy failed: {e}"
+        )));
     }
     Ok(Outcome::Regressed(reason))
 }
@@ -399,5 +418,30 @@ mod tests {
         let out = run(&change(&compose, dir.path()), &NoopBackup, &deployer, &mut trace).unwrap();
         assert!(matches!(out, Outcome::RegressFailed(_)), "got {out:?}");
         assert_eq!(*deployer.calls.borrow(), 2, "attempted the rollback redeploy");
+    }
+
+    #[test]
+    fn first_deploy_failure_with_no_prior_is_regress_failed_not_clean() {
+        // A brand-new stack (no prior snapshot) whose health-gate fails must NOT
+        // be reported as a clean rollback — there is nothing to roll back to, and
+        // the failed change is still live. This is the "tool lies about safety"
+        // hole the critique found.
+        let dir = tempfile::tempdir().unwrap();
+        gitver::init(dir.path()).unwrap();
+        let compose = dir.path().join("docker-compose.yml");
+        std::fs::write(&compose, "services:\n  app:\n    image: nginx:1.27\n").unwrap();
+        // No snapshot before run → history_scoped is empty → prior == None.
+        let deployer = CountingDeployer::new(1); // first (health) deploy fails
+        let mut trace = Vec::new();
+        let out = run(&change(&compose, dir.path()), &NoopBackup, &deployer, &mut trace).unwrap();
+        assert!(matches!(out, Outcome::RegressFailed(_)), "got {out:?}");
+        assert_eq!(*deployer.calls.borrow(), 1, "no rollback redeploy is possible without a prior");
+    }
+
+    #[test]
+    fn empty_compose_is_not_a_successful_deploy() {
+        let (dir, compose) = repo("networks:\n  default: {}\n");
+        let out = run(&change(&compose, dir.path()), &NoopBackup, &OkDeployer, &mut Vec::new()).unwrap();
+        assert!(matches!(out, Outcome::Blocked(_)), "no services → blocked, not deployed: {out:?}");
     }
 }

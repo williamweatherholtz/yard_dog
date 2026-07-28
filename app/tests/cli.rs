@@ -7,6 +7,22 @@
 use assert_cmd::Command;
 use std::io::Write;
 
+/// Backup subdirs are now `basename-<hash>` (collision-free), so find one by its
+/// basename prefix rather than assuming the plain basename.
+fn find_backup_sub(bak: &std::path::Path, prefix: &str) -> std::path::PathBuf {
+    std::fs::read_dir(bak)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with(&format!("{prefix}-")))
+                .unwrap_or(false)
+        })
+        .unwrap_or_else(|| panic!("no backup subdir starting with {prefix}- in {bak:?}"))
+}
+
 #[test]
 fn inspect_reports_types_existence_and_remediation() {
     let dir = tempfile::tempdir().unwrap();
@@ -143,7 +159,7 @@ fn backup_run_copies_bind_data() {
         .assert()
         .success();
     assert!(
-        dir.path().join("bak").join("data").join("file.txt").exists(),
+        find_backup_sub(&dir.path().join("bak"), "data").join("file.txt").exists(),
         "a confirmed backup run must copy the bind's data into the destination"
     );
 }
@@ -205,7 +221,7 @@ fn verify_reports_clean_then_detects_corruption() {
         .success();
 
     // tampering is detected (non-zero exit)
-    std::fs::write(dir.path().join("bak").join("data").join("file.txt"), b"tampered-and-longer").unwrap();
+    std::fs::write(find_backup_sub(&dir.path().join("bak"), "data").join("file.txt"), b"tampered-and-longer").unwrap();
     Command::cargo_bin("yd")
         .unwrap()
         .current_dir(dir.path())
@@ -445,7 +461,7 @@ fn backup_resolves_relative_paths_from_any_cwd() {
         .success();
     // dest + copied bind resolve under the stack dir, not `elsewhere`
     assert!(stack.path().join("bak").join("manifest.json").exists(), "manifest written under stack dir");
-    assert!(stack.path().join("bak").join("html").join("index.html").exists(), "relative bind copied");
+    assert!(find_backup_sub(&stack.path().join("bak"), "html").join("index.html").exists(), "relative bind copied");
     assert!(!elsewhere.path().join("bak").exists(), "nothing created in the foreign cwd");
 }
 

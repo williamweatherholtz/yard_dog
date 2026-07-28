@@ -128,50 +128,127 @@ pub fn run_guardrails(yaml: &str) -> Vec<Finding> {
             severity: Severity::Block,
             message,
         };
-        if svc.get("privileged").and_then(|v| v.as_bool()) == Some(true) {
+        // Privileged: a YAML bool `true` OR a truthy string/int ("true"/"yes"/1).
+        if is_truthy(svc.get("privileged")) {
             out.push(block("privileged", "runs privileged (full host device/root access)".into()));
         }
-        // A docker-socket mount is host-root-equivalent.
-        if let Some(serde_yaml::Value::Sequence(vols)) = svc.get("volumes") {
-            for vol in vols {
-                let src = match vol {
+        // Host-root-equivalent mounts: the Docker socket, or a sensitive host path
+        // (short OR long volume syntax).
+        for src in volume_sources(svc) {
+            if src.ends_with("docker.sock") {
+                out.push(block("docker-socket", "mounts the Docker socket (equivalent to host root)".into()));
+            } else if is_sensitive_host_path(&src) {
+                out.push(block("host-path-mount", format!("mounts a sensitive host path {src} (host-root-equivalent)")));
+            }
+        }
+        // Raw host device passthrough (e.g. /dev/mem, /dev/sda) = host takeover.
+        if let Some(devs) = svc.get("devices").and_then(|v| v.as_sequence()) {
+            for d in devs {
+                let s = match d {
                     serde_yaml::Value::String(s) => s.split(':').next().unwrap_or("").to_string(),
-                    serde_yaml::Value::Mapping(m) => m
-                        .get("source")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    _ => continue,
+                    serde_yaml::Value::Mapping(m) => m.get("source").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
+                    _ => String::new(),
                 };
-                if src.ends_with("docker.sock") {
-                    out.push(block("docker-socket", "mounts the Docker socket (equivalent to host root)".into()));
+                if !s.is_empty() {
+                    out.push(block("host-device", format!("passes through host device {s}")));
                 }
             }
         }
-        // Dangerous added capabilities.
-        if let Some(serde_yaml::Value::Sequence(caps)) = svc.get("cap_add") {
-            for cap in caps {
-                if let Some(c) = cap.as_str() {
-                    let cu = c.trim_start_matches("CAP_").to_ascii_uppercase();
-                    if matches!(cu.as_str(), "SYS_ADMIN" | "SYS_PTRACE" | "SYS_MODULE" | "NET_ADMIN" | "ALL") {
-                        out.push(Finding {
-                            service: service.clone(),
-                            rule: "dangerous-cap".into(),
-                            severity: if cu == "SYS_ADMIN" || cu == "ALL" { Severity::Block } else { Severity::Warn },
-                            message: format!("adds dangerous capability {c}"),
-                        });
+        // Disabling the seccomp/AppArmor sandbox widens every other escape.
+        if let Some(opts) = svc.get("security_opt").and_then(|v| v.as_sequence()) {
+            for o in opts {
+                if let Some(s) = o.as_str() {
+                    let s = s.to_ascii_lowercase();
+                    if s.contains("unconfined") && (s.contains("seccomp") || s.contains("apparmor")) {
+                        out.push(block("security-opt-unconfined", format!("disables the container sandbox ({s})")));
                     }
                 }
             }
         }
+        // Dangerous added capabilities (sequence OR a single scalar string).
+        for c in cap_add_list(svc) {
+            let cu = c.trim_start_matches("CAP_").to_ascii_uppercase();
+            if BLOCK_CAPS.contains(&cu.as_str()) {
+                out.push(block("dangerous-cap", format!("adds host-compromising capability {c}")));
+            } else if WARN_CAPS.contains(&cu.as_str()) {
+                out.push(warn(&service, "dangerous-cap", format!("adds capability {c}")));
+            }
+        }
+        // Namespace sharing reduces isolation but is sometimes intentional (Warn).
         if svc.get("network_mode").and_then(|v| v.as_str()) == Some("host") {
             out.push(warn(&service, "host-network", "uses host networking (no network isolation)".into()));
         }
         if svc.get("pid").and_then(|v| v.as_str()) == Some("host") {
             out.push(warn(&service, "host-pid", "shares the host PID namespace".into()));
         }
+        if svc.get("ipc").and_then(|v| v.as_str()) == Some("host") {
+            out.push(warn(&service, "host-ipc", "shares the host IPC namespace".into()));
+        }
     }
     out
+}
+
+/// Capabilities that are host-root-equivalent → Block.
+const BLOCK_CAPS: &[&str] = &[
+    "ALL", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_RAWIO", "SYS_BOOT",
+    "DAC_READ_SEARCH", "DAC_OVERRIDE", "BPF", "MKNOD",
+];
+/// Capabilities worth a warning (powerful but not directly host-root).
+const WARN_CAPS: &[&str] = &["NET_ADMIN", "NET_RAW", "SYSLOG", "SYS_TIME", "SYS_NICE"];
+
+/// A YAML value that means "true": bool true, "true"/"yes"/"on"/"1", or int 1.
+fn is_truthy(v: Option<&serde_yaml::Value>) -> bool {
+    match v {
+        Some(serde_yaml::Value::Bool(b)) => *b,
+        Some(serde_yaml::Value::String(s)) => {
+            matches!(s.trim().to_ascii_lowercase().as_str(), "true" | "yes" | "on" | "1")
+        }
+        Some(serde_yaml::Value::Number(n)) => n.as_i64() == Some(1),
+        _ => false,
+    }
+}
+
+/// Source paths of a service's `volumes:` (short `SRC:DST` and long `source:`).
+fn volume_sources(svc: &serde_yaml::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(vols) = svc.get("volumes").and_then(|v| v.as_sequence()) {
+        for vol in vols {
+            match vol {
+                serde_yaml::Value::String(s) => out.push(s.split(':').next().unwrap_or("").to_string()),
+                serde_yaml::Value::Mapping(m) => {
+                    if let Some(src) = m.get("source").and_then(|x| x.as_str()) {
+                        out.push(src.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// `cap_add` as a list, tolerating both a sequence and a single scalar string.
+fn cap_add_list(svc: &serde_yaml::Value) -> Vec<String> {
+    match svc.get("cap_add") {
+        Some(serde_yaml::Value::Sequence(caps)) => {
+            caps.iter().filter_map(|c| c.as_str().map(String::from)).collect()
+        }
+        Some(serde_yaml::Value::String(s)) => vec![s.clone()],
+        _ => Vec::new(),
+    }
+}
+
+/// True for a host bind source that is (under) a sensitive host root.
+fn is_sensitive_host_path(src: &str) -> bool {
+    let n = src.replace('\\', "/");
+    let n = n.trim_end_matches('/');
+    if n.is_empty() {
+        return src == "/"; // "/" trims to "" (root); a genuinely empty source is not
+    }
+    const SENSITIVE: &[&str] = &[
+        "/proc", "/sys", "/dev", "/var/run", "/run", "/var/lib/docker", "/boot", "/etc",
+    ];
+    SENSITIVE.iter().any(|r| n == *r || n.starts_with(&format!("{r}/")))
 }
 
 /// A stack passes iff it has no blocking findings.
@@ -222,6 +299,30 @@ mod tests {
         assert!(rules.contains(&"host-network"), "network_mode host flagged");
         assert!(rules.contains(&"host-pid"), "pid host flagged");
         assert!(!verdict(&f), "a privileged/docker-socket stack must not pass");
+    }
+
+    #[test]
+    fn security_lens_catches_evasion_variants() {
+        // privileged as a quoted string (as_bool would miss it)
+        assert!(!verdict(&run_guardrails("services:\n  a:\n    image: nginx:1.27\n    privileged: \"true\"\n")), "privileged string");
+        // sensitive host-root binds (not the literal socket)
+        let f = run_guardrails("services:\n  a:\n    image: nginx:1.27\n    volumes:\n      - /:/host\n");
+        assert!(rules(&f).contains(&"host-path-mount") && !verdict(&f), "root mount blocked: {f:?}");
+        assert!(!verdict(&run_guardrails("services:\n  a:\n    image: nginx:1.27\n    volumes:\n      - /var/run:/hr\n")), "/var/run bind blocked");
+        // raw host device passthrough
+        let f = run_guardrails("services:\n  a:\n    image: nginx:1.27\n    devices:\n      - /dev/mem:/dev/mem\n");
+        assert!(rules(&f).contains(&"host-device") && !verdict(&f), "device passthrough blocked: {f:?}");
+        // security_opt unconfined
+        assert!(!verdict(&run_guardrails("services:\n  a:\n    image: nginx:1.27\n    security_opt:\n      - seccomp:unconfined\n")), "seccomp unconfined blocked");
+        // host-escape caps now Block (were Warn / absent)
+        for cap in ["SYS_MODULE", "DAC_READ_SEARCH", "SYS_RAWIO", "SYS_PTRACE"] {
+            let y = format!("services:\n  a:\n    image: nginx:1.27\n    cap_add:\n      - {cap}\n");
+            assert!(!verdict(&run_guardrails(&y)), "{cap} must block");
+        }
+        // cap_add as a single scalar string
+        assert!(!verdict(&run_guardrails("services:\n  a:\n    image: nginx:1.27\n    cap_add: SYS_ADMIN\n")), "scalar cap_add blocked");
+        // ordinary relative/named data binds are NOT sensitive host paths
+        assert!(verdict(&run_guardrails("services:\n  a:\n    image: nginx:1.27\n    restart: unless-stopped\n    mem_limit: 128m\n    healthcheck:\n      test: [\"CMD\",\"true\"]\n    volumes:\n      - ./data:/data\n      - db-data:/var/lib/x\n")), "ordinary data binds pass");
     }
 
     #[test]

@@ -311,8 +311,12 @@ fn resolve_bind(stack_dir: &Path, source: &str) -> std::path::PathBuf {
 /// The outcome of a data-restore attempt.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RestoreOutcome {
-    /// Restored these bind sources (paths) from the backup.
-    Restored(Vec<String>),
+    /// Restored the `restored` bind sources; `skipped` targets (named volumes / DB
+    /// dumps) were NOT restored and the operator must be told so.
+    Restored {
+        restored: Vec<String>,
+        skipped: Vec<String>,
+    },
     /// The backup failed its integrity manifest — refused to restore (N findings).
     VerifyFailed(usize),
     /// No `--yes`: nothing was done.
@@ -333,32 +337,85 @@ pub fn restore_bind_data(
     if !confirmed {
         return Ok(RestoreOutcome::Skipped);
     }
-    // Verify the source backup first, if it carries a manifest.
-    if let Ok(text) = std::fs::read_to_string(dest_dir.join("manifest.json")) {
-        if let Ok(manifest) = serde_json::from_str::<crate::verify::Manifest>(&text) {
-            let findings = crate::verify::verify(dest_dir, &manifest)?;
-            if !findings.is_empty() {
-                return Ok(RestoreOutcome::VerifyFailed(findings.len()));
-            }
-        }
+    // Verify FIRST, and FAIL CLOSED: a missing or unparseable manifest means the
+    // backup is unverifiable — refuse rather than restore something unchecked.
+    let text = std::fs::read_to_string(dest_dir.join("manifest.json")).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "backup has no manifest — refusing to restore an unverifiable backup",
+        )
+    })?;
+    let manifest: crate::verify::Manifest = serde_json::from_str(&text).map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("unreadable backup manifest: {e}"))
+    })?;
+    let findings = crate::verify::verify(dest_dir, &manifest)?;
+    if !findings.is_empty() {
+        return Ok(RestoreOutcome::VerifyFailed(findings.len()));
     }
     let mounts = parse_mounts(yaml, env).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e:?}")))?;
     let mut restored = Vec::new();
+    let mut skipped = Vec::new();
     for t in enumerate_stack_data(&mounts, &NoVol, &NoNet) {
         if t.kind != TargetKind::Bind {
-            continue; // volumes / network are not bind-restored here
+            // Named volumes / DB dumps are not bind-restored here — report them so
+            // the operator is not told "restored" when this data was untouched.
+            skipped.push(t.name.clone());
+            continue;
         }
-        let base = Path::new(&t.name)
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "root".to_string());
-        let backup_path = dest_dir.join(&base);
+        let backup_path = dest_dir.join(backup_subdir(&t.name));
         if backup_path.exists() {
-            copy_tree(&backup_path, &resolve_bind(stack_dir, &t.name))?;
+            restore_tree_atomic(&backup_path, &resolve_bind(stack_dir, &t.name))?;
             restored.push(t.name.clone());
         }
     }
-    Ok(RestoreOutcome::Restored(restored))
+    Ok(RestoreOutcome::Restored { restored, skipped })
+}
+
+/// A collision-free backup subdirectory name for a source path. Two sources with
+/// the same basename (`./app/data` and `./db/data`) must NOT share a subdir, so we
+/// suffix the readable basename with a hash of the FULL source path.
+pub fn backup_subdir(source: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let base = Path::new(source)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "root".to_string());
+    let h = Sha256::digest(source.as_bytes());
+    format!("{base}-{:02x}{:02x}{:02x}{:02x}", h[0], h[1], h[2], h[3])
+}
+
+/// Restore `backup_path` over `live` atomically: copy into a sibling temp dir,
+/// then swap it into place, so a mid-copy failure never leaves `live` half-
+/// overwritten (corrupt).
+fn restore_tree_atomic(backup_path: &Path, live: &Path) -> std::io::Result<()> {
+    let tmp = sibling(live, ".yd-restore-tmp");
+    let old = sibling(live, ".yd-restore-old");
+    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = std::fs::remove_file(&tmp);
+    copy_tree(backup_path, &tmp)?; // failure here does not touch `live`
+    let _ = std::fs::remove_dir_all(&old);
+    let _ = std::fs::remove_file(&old);
+    if live.exists() {
+        std::fs::rename(live, &old)?;
+    }
+    match std::fs::rename(&tmp, live) {
+        Ok(()) => {
+            let _ = std::fs::remove_dir_all(&old);
+            let _ = std::fs::remove_file(&old);
+            Ok(())
+        }
+        Err(e) => {
+            // Swap failed — put the original back rather than leave `live` missing.
+            if old.exists() {
+                let _ = std::fs::rename(&old, live);
+            }
+            Err(e)
+        }
+    }
+}
+
+fn sibling(p: &Path, suffix: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(format!("{}{suffix}", p.display()))
 }
 
 #[cfg(test)]
@@ -373,10 +430,14 @@ mod tests {
         // current (to be overwritten) bind data
         std::fs::create_dir_all(stack.path().join("html")).unwrap();
         std::fs::write(stack.path().join("html").join("index.html"), b"CURRENT").unwrap();
-        // a backup dest holding the good copy
+        // a backup dest holding the good copy — under the collision-free subdir,
+        // with a valid manifest (restore now fails closed without one).
         let dest = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dest.path().join("html")).unwrap();
-        std::fs::write(dest.path().join("html").join("index.html"), b"BACKED-UP").unwrap();
+        let sub = backup_subdir("./html");
+        std::fs::create_dir_all(dest.path().join(&sub)).unwrap();
+        std::fs::write(dest.path().join(&sub).join("index.html"), b"BACKED-UP").unwrap();
+        let manifest = crate::verify::build_manifest(dest.path()).unwrap();
+        std::fs::write(dest.path().join("manifest.json"), serde_json::to_string(&manifest).unwrap()).unwrap();
 
         let yaml = "services:\n  web:\n    image: nginx:1.27\n    volumes:\n      - ./html:/usr/share/nginx/html\n";
         let env = HashMap::new();
@@ -386,7 +447,7 @@ mod tests {
 
         // confirmed restores the backed-up content over the current
         let out = restore_bind_data(yaml, &env, stack.path(), dest.path(), true).unwrap();
-        assert!(matches!(out, RestoreOutcome::Restored(ref v) if v.iter().any(|s| s.contains("html"))), "got {out:?}");
+        assert!(matches!(out, RestoreOutcome::Restored { ref restored, .. } if restored.iter().any(|s| s.contains("html"))), "got {out:?}");
         assert_eq!(std::fs::read_to_string(stack.path().join("html").join("index.html")).unwrap(), "BACKED-UP");
     }
 

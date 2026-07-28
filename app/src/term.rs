@@ -213,15 +213,20 @@ pub fn resize(id: &str, rows: u16, cols: u16) -> io::Result<()> {
     r.map_err(oops)
 }
 
-/// Kill, reap, and forget a session. Reaping (`wait`) avoids leaving a `<defunct>`
-/// zombie on Unix, since portable-pty's child is a plain std Child.
+/// Kill, reap, and forget a session. The kill+reap runs on a detached thread so a
+/// slow `wait()` can never stall the caller — notably the single sweeper thread,
+/// which would otherwise stop reaping every other abandoned session. Reaping
+/// (`wait`) avoids a `<defunct>` zombie on Unix (portable-pty's child is a plain
+/// std Child).
 pub fn close(id: &str) {
     if let Some(sess) = lock(registry()).remove(id) {
-        let mut child = lock(&sess.child);
-        let _ = child.kill();
-        let _ = child.wait();
         sess.alive.store(false, Ordering::SeqCst);
         sess.cv.notify_all();
+        std::thread::spawn(move || {
+            let mut child = lock(&sess.child);
+            let _ = child.kill();
+            let _ = child.wait();
+        });
     }
 }
 

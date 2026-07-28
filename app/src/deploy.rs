@@ -128,7 +128,7 @@ mod tests {
     #[test]
     fn success_snapshots_and_backs_up() {
         let (dir, compose) = repo();
-        std::fs::write(&compose, "v1").unwrap();
+        std::fs::write(&compose, "services:\n  web:\n    image: nginx:1.27\n").unwrap();
         let backup = RecBackup::default();
         let out = safe_deploy(&compose, dir.path(), true, &backup, &OkDeployer).unwrap();
         assert_eq!(out, DeployOutcome::Deployed);
@@ -139,15 +139,16 @@ mod tests {
     #[test]
     fn failure_rolls_back_to_last_good() {
         let (dir, compose) = repo();
-        std::fs::write(&compose, "good").unwrap();
+        let good = "services:\n  web:\n    image: nginx:1.27\n";
+        std::fs::write(&compose, good).unwrap();
         gitver::snapshot(dir.path(), "good").unwrap();
-        std::fs::write(&compose, "broken").unwrap();
+        std::fs::write(&compose, "services:\n  web:\n    image: nginx:1.29\n").unwrap();
 
         let out = safe_deploy(&compose, dir.path(), true, &RecBackup::default(), &FailThenOkDeployer::default()).unwrap();
         assert_eq!(out, DeployOutcome::RolledBack);
         assert_eq!(
             std::fs::read_to_string(&compose).unwrap(),
-            "good",
+            good,
             "a failed deploy must restore the last-good config"
         );
     }
@@ -155,7 +156,7 @@ mod tests {
     #[test]
     fn backup_failure_aborts_before_deploy() {
         let (dir, compose) = repo();
-        std::fs::write(&compose, "v1").unwrap();
+        std::fs::write(&compose, "services:\n  web:\n    image: nginx:1.27\n").unwrap();
         let spy = SpyDeployer::default();
         let out = safe_deploy(&compose, dir.path(), true, &FailBackup, &spy).unwrap();
         assert!(matches!(out, DeployOutcome::BackupFailed(_)));

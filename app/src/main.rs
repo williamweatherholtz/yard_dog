@@ -793,8 +793,15 @@ fn run_restore(file: &str, from: &str, yes: bool) -> Result<(), String> {
     match yarddog::backup::restore_bind_data(&yaml, &env, stack_dir, &dest, yes)
         .map_err(|e| format!("restore failed: {e}"))?
     {
-        yarddog::backup::RestoreOutcome::Restored(v) => {
-            println!("restored {} bind path(s): {:?}", v.len(), v);
+        yarddog::backup::RestoreOutcome::Restored { restored, skipped } => {
+            println!("restored {} bind path(s): {:?}", restored.len(), restored);
+            if !skipped.is_empty() {
+                println!(
+                    "WARNING: {} target(s) were NOT restored (named volumes / DB dumps need a manual restore): {:?}",
+                    skipped.len(),
+                    skipped
+                );
+            }
         }
         yarddog::backup::RestoreOutcome::VerifyFailed(n) => {
             eprintln!("refused: backup failed verification ({n} issue(s)) — not restoring");
@@ -969,10 +976,9 @@ impl yarddog::backup::Archiver for RealArchiver {
         match target.kind {
             TargetKind::Bind | TargetKind::Network => {
                 let src = std::path::Path::new(&target.name);
-                let base = src
-                    .file_name()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "root".to_string());
+                // Collision-free subdir (basename + full-path hash), symmetric with
+                // restore, so two sources sharing a basename don't cross-contaminate.
+                let base = yarddog::backup::backup_subdir(&target.name);
                 let dst = std::path::Path::new(dest_dir).join(base);
                 if src.is_file() {
                     if let Some(parent) = dst.parent() {

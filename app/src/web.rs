@@ -16,6 +16,13 @@ use crate::remediation::Issue;
 use crate::{compose, gitver, guardrails, hostfs, lifecycle, preflight, registry, report, stacks, stats, term, updates, verify, workload};
 use base64::prelude::{Engine as _, BASE64_STANDARD};
 use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
+/// Global lock serializing mutating git/stack operations (see the serve loop).
+fn mutation_lock() -> &'static Mutex<()> {
+    static L: OnceLock<Mutex<()>> = OnceLock::new();
+    L.get_or_init(|| Mutex::new(()))
+}
 use std::io;
 use std::path::{Path, PathBuf};
 use tiny_http::{Header, Method, Response, Server};
@@ -56,7 +63,28 @@ pub fn safe_join(root: &Path, rel: &str) -> Option<PathBuf> {
             _ => return None,
         }
     }
-    Some(root.join(p))
+    let candidate = root.join(p);
+    // Symlink-resistant: the lexical check above stops `..`/absolute paths, but a
+    // symlink UNDER root pointing outside would still resolve out. When the root
+    // actually exists, canonicalize the nearest existing ancestor and require it to
+    // stay under the canonical root. (Best-effort: if root can't be canonicalized —
+    // e.g. it doesn't exist — the lexical check above is still the guarantee.)
+    if let Ok(root_canon) = root.canonicalize() {
+        let mut anc: &Path = candidate.as_path();
+        loop {
+            if let Ok(real) = anc.canonicalize() {
+                if !real.starts_with(&root_canon) {
+                    return None;
+                }
+                break;
+            }
+            match anc.parent() {
+                Some(par) => anc = par,
+                None => break,
+            }
+        }
+    }
+    Some(candidate)
 }
 
 /// A lifecycle event name the API accepts (allow-list, not free text).
@@ -406,8 +434,18 @@ fn diff_json(root: &Path, query: &str) -> Option<String> {
     let from = query_param(query, "from")?;
     let to = query_param(query, "to");
     safe_join(root, &rel)?;
+    // `from`/`to` are commit shas passed as git argv — reject anything not a plain
+    // hex sha so a value like `--output=…` can't be read as a git flag.
+    if !is_git_sha(&from) || to.as_deref().map(|t| !is_git_sha(t)).unwrap_or(false) {
+        return None;
+    }
     let d = gitver::diff_scoped(root, &stack_rel(&rel), &from, to.as_deref()).unwrap_or_default();
     Some(format!("{{\"diff\":{}}}", json_escape(&d)))
+}
+
+/// A plausible git commit sha: 4–64 hex chars. Rejects flags/paths/injection.
+fn is_git_sha(s: &str) -> bool {
+    (4..=64).contains(&s.len()) && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// `GET /api/stacks` — the stacks discovered under root, each with lifecycle.
@@ -626,8 +664,10 @@ fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
             let Some(rel) = field(&v, "compose") else { return bad("compose required") };
             let Some(abs) = compose_abs(rel) else { return bad("path outside root") };
             let name = field(&v, "name").unwrap_or(".yd-backups");
-            if safe_join(root, name).is_none() && !name.starts_with(".yd-backups") {
-                return bad("dest outside root");
+            // Confine unconditionally — no prefix escape hatch. `.yd-backups[/point]`
+            // is a plain relative name and passes safe_join on its own.
+            if safe_join(root, name).is_none() {
+                return bad("restore source outside root");
             }
             let dest = Path::new(&abs).parent().map(|p| p.join(name)).map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
             (200, run_tool(&yd, &["restore".into(), abs, "--from".into(), dest, "--yes".into()]))
@@ -906,7 +946,17 @@ pub fn serve(host: &str, port: u16, root: &Path) -> io::Result<()> {
                 } else {
                     let mut body = String::new();
                     let _ = request.as_reader().read_to_string(&mut body);
-                    let (status, json) = handle_action(&root, p, &body);
+                    // Serialize MUTATING git/stack actions behind one global lock —
+                    // the monorepo shares a single .git/index, and the old
+                    // sequential loop was the de-facto serializer that
+                    // thread-per-request removed. Terminal I/O stays concurrent
+                    // (it must not block on a long deploy) and reads are GET.
+                    let (status, json) = if p.starts_with("/api/term/") {
+                        handle_action(&root, p, &body)
+                    } else {
+                        let _guard = mutation_lock().lock().unwrap_or_else(|e| e.into_inner());
+                        handle_action(&root, p, &body)
+                    };
                     json_response(status, json)
                 }
             }
