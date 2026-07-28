@@ -261,12 +261,16 @@ async function post(path,body){return api(path,{method:"POST",headers:{"Content-
 
 // ---- console dock ----
 function renderConsole(){const pre=$("#console");if(!pre)return;pre.innerHTML="";
-  if(!consoleBuf.length){pre.append(el("span","dim","Command output appears here — deploys, backups, git, everything yd runs."));}
-  else for(const l of consoleBuf)pre.append(el("span",l.cls,l.text+"\n"));
+  if(!consoleBuf.length){pre.append(el("span","dim","Command output appears here — deploys, backups, git, everything yd runs."));pre.dataset.filled="0";}
+  else{for(const l of consoleBuf)pre.append(el("span",l.cls,l.text+"\n"));pre.dataset.filled="1";}
   pre.scrollTop=pre.scrollHeight;
   const last=consoleBuf.length?consoleBuf[consoleBuf.length-1].text:"Ready.";$("#docklast").textContent=last;}
-function logLine(cls,text){consoleBuf.push({cls,text});if(consoleBuf.length>300)consoleBuf.shift();
-  if($("#dock").classList.contains("collapsed")&&(cls==="cmd"||cls==="bad"))setDock(true);renderConsole();}
+function logLine(cls,text){consoleBuf.push({cls,text});const trimmed=consoleBuf.length>300;if(trimmed)consoleBuf.shift();
+  if($("#dock").classList.contains("collapsed")&&(cls==="cmd"||cls==="bad"))setDock(true);
+  const pre=$("#console");if(!pre)return;
+  // Append-only in the common case; full rebuild only on the first line or a trim.
+  if(trimmed||pre.dataset.filled!=="1"){renderConsole();}
+  else{pre.append(el("span",cls,text+"\n"));pre.scrollTop=pre.scrollHeight;$("#docklast").textContent=text;}}
 function setDock(open){$("#dock").classList.toggle("collapsed",!open);$("#docktoggle").textContent=open?"▾":"▴";}
 $("#dockbar").onclick=e=>{if(e.target.id==="dockclear")return;setDock($("#dock").classList.contains("collapsed"));};
 $("#dockclear").onclick=e=>{e.stopPropagation();consoleBuf=[];renderConsole();};
@@ -357,7 +361,7 @@ function openUpgrade(row,s){if(row.nextSibling&&row.nextSibling.classList&&row.n
   const inp=el("input");inp.className="mono";inp.value=s.image||"";inp.style.cssText="flex:1;min-width:220px;font:13px/1 var(--mono);padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--sunken);color:var(--ink);";
   const go=el("button","btn primary sm","Upgrade "+s.name);const cx=el("button","btn sm","Cancel");
   go.onclick=()=>{const img=inp.value.trim();if(!img||img===s.image){cx.click();return;}
-    confirmAct("Upgrade “"+s.name+"” to "+img+"? Health-gated with automatic rollback.","/api/upgrade",{compose:current,service:s.name,image:img},"upgrade "+s.name).then(()=>tr.remove());};
+    confirmAct("Upgrade “"+s.name+"” to "+img+"? Health-gated with automatic rollback.","/api/upgrade",{compose:current,service:s.name,image:img},"upgrade "+s.name).then(ok=>{if(ok)tr.remove();});};
   cx.onclick=()=>tr.remove();
   f.append(el("span","eyebrow","New image"));f.append(inp);f.append(go);f.append(cx);td.append(f);tr.append(td);
   row.after(tr);inp.focus();inp.select();}
@@ -418,7 +422,7 @@ async function renderMounts(){const b=$("#tabbody");b.append(el("p","muted","Rea
   if(allIssues.length)sum.append(chip("bad",allIssues.length+" path issue"+(allIssues.length===1?"":"s")));
   else sum.append(chip("ok","no path issues"));
   if(fixable>0){const bt=el("button","btn primary sm","Apply fixes ("+fixable+")");
-    bt.onclick=()=>confirmAct("Apply automatic directory mitigations? Creates missing directories owned by the container user and corrects ownership. Type mismatches are left for you to resolve.","/api/fix",{compose:current},"fix path issues").then(()=>renderShell());
+    bt.onclick=()=>confirmAct("Apply automatic directory mitigations? Creates missing directories owned by the container user and corrects ownership. Type mismatches are left for you to resolve.","/api/fix",{compose:current},"fix path issues").then(ok=>{if(ok)renderShell();});
     sum.append(bt);sum.append(el("span","muted","creates missing dirs + fixes ownership"));}
   b.append(sum);
   const tbl=el("table");const hr=el("tr");["Service","Target","Source","Type","Status","Details"].forEach(h=>hr.append(el("th",null,h)));tbl.append(hr);
@@ -463,7 +467,7 @@ async function renderHistory(){const b=$("#tabbody");
   items.forEach((it,i)=>{const li=el("li");li.append(el("span","sha",(it.sha||"").slice(0,8)));li.append(el("span","msg",it.message||""));
     const d=el("button","btn sm","Diff vs current");d.onclick=()=>showDiff(it.sha,null);li.append(d);
     if(i+1<items.length){const pd=el("button","btn sm","Diff vs prev");pd.onclick=()=>showDiff(items[i+1].sha,it.sha);li.append(pd);}
-    const rb=el("button","btn danger sm","Restore");rb.onclick=()=>confirmAct("Restore snapshot "+(it.sha||"").slice(0,8)+"? Current state is snapshotted first; redeploy from Overview after.","/api/restore",{compose:current,sha:it.sha},"restore "+(it.sha||"").slice(0,8),true).then(()=>{delete drafts[current];selectStack(current,true);});li.append(rb);
+    const rb=el("button","btn danger sm","Restore");rb.onclick=()=>confirmAct("Restore snapshot "+(it.sha||"").slice(0,8)+"? Current state is snapshotted first; redeploy from Overview after.","/api/restore",{compose:current,sha:it.sha},"restore "+(it.sha||"").slice(0,8),true).then(ok=>{if(ok){delete drafts[current];selectStack(current,true);}});li.append(rb);
     ul.append(li);});
   b.append(ul);
   const ds=el("section");ds.append(el("h3","sec","Diff"));const pre=el("pre","diff");pre.id="diffout";pre.append(el("span","dim","Pick a diff above."));ds.append(pre);b.append(ds);}
@@ -475,7 +479,7 @@ async function showDiff(from,to){const pre=$("#diffout");pre.innerHTML="Loading�
 
 // ---- Backups ----
 async function renderBackups(){const b=$("#tabbody");
-  const bar=el("div","bar");const bk=el("button","btn primary","Back up now");bk.onclick=()=>confirmAct("Run an application-consistent backup?","/api/backup",{compose:current},"backup").then(()=>renderShell());bar.append(bk);b.append(bar);
+  const bar=el("div","bar");const bk=el("button","btn primary","Back up now");bk.onclick=()=>confirmAct("Run an application-consistent backup?","/api/backup",{compose:current},"backup").then(ok=>{if(ok)renderShell();});bar.append(bk);b.append(bar);
   const {data}=await api("/api/backups?compose="+enc(current));const items=data.items||[];
   if(!items.length){b.append(el("p","muted","No recovery points yet — take a backup to create one."));return;}
   const tbl=el("table");const hr=el("tr");["Recovery point","Files","Integrity",""].forEach(h=>hr.append(el("th",null,h)));tbl.append(hr);
@@ -548,7 +552,7 @@ async function renderTerminal(){const b=$("#tabbody");const forC=current;
     const stopObserving=()=>{try{if(state.ro)state.ro.disconnect();}catch{}};
     (async function poll(){
       while(!state.stop&&activeTerm===state){
-        let r;try{r=await api("/api/term/read?session="+enc(session));}catch{
+        let r;try{r=await post("/api/term/read",{session});}catch{
           // transport dropped — show it honestly (green-on-dead was the bug); the
           // session may still be alive server-side and is reclaimed by reconnect or
           // the idle sweeper.
@@ -574,7 +578,7 @@ async function renderAll(){closeTerm();current=null;setNav("nav-all");renderRail
   m.append(el("p","muted",`Every stack under the served root. Check guardrails or back up all of them at once, and adopt newly-discovered stacks so Yard Dog manages them. ${stacks.length} stack${stacks.length===1?"":"s"} found.`));
   const bar=el("div","bar");bar.style.marginTop="14px";const B=(l,cls,fn)=>{const x=el("button","btn "+cls,l);x.onclick=fn;bar.append(x);};
   B("Check all","",()=>doFleet("/api/fleet/check","check"));
-  B("Back up all","",()=>confirmAct("Back up every stack under the served root?","/api/fleet/backup",{},"backup all").then(r=>fleetResults(r)));
+  B("Back up all","",()=>askConfirm("Back up every stack under the served root?").then(async ok=>{if(!ok)return;logLine("cmd","▶ fleet backup all");fleetResults(await post("/api/fleet/backup",{}));}));
   const un=stacks.filter(s=>!s.adopted);
   if(un.length)B(`Adopt all (${un.length})`,"primary",()=>askConfirm("Adopt "+un.length+" unmanaged stack"+(un.length===1?"":"s")+" into Yard Dog?").then(async ok=>{if(!ok)return;for(const s of un)await post("/api/adopt",{compose:s.compose});logLine("ok","✓ adopted "+un.length+" stack(s)");toast("ok","Adopted "+un.length);renderAll();}));
   m.append(bar);
@@ -633,7 +637,8 @@ async function doGit(path,body,label){logLine("cmd","▶ git "+label);const {dat
   updateGitSig();}
 
 // ---- actions ----
-async function confirmAct(msg,path,body,label,danger){if(!await askConfirm(msg,"Confirm",danger))return;return doAct(path,body,label);}
+// Resolves true only when confirmed + run, so callers can skip follow-up work on cancel.
+async function confirmAct(msg,path,body,label,danger){if(!await askConfirm(msg,"Confirm",danger))return false;await doAct(path,body,label);return true;}
 async function doAct(path,body,label){logLine("cmd","▶ yd "+label);const {data}=await post(path,body);
   if(data.error){logLine("bad","✗ "+data.error);toast("bad",label+" failed");return;}
   if(data.stdout&&data.stdout.trim())logLine("",data.stdout.trimEnd());

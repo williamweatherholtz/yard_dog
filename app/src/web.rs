@@ -734,6 +734,15 @@ fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
                 Err(e) => (200, format!("{{\"ok\":false,\"error\":{}}}", json_escape(&e.to_string()))),
             }
         }
+        // Draining long-poll read is a POST behind the anti-CSRF gate (it mutates
+        // server state — it empties the PTY output buffer), not a CSRF-exempt GET.
+        "/api/term/read" => {
+            let Some(sid) = field(&v, "session") else { return bad("session required") };
+            match term::read(sid, 500) {
+                Some((data, alive)) => (200, format!("{{\"data\":\"{}\",\"alive\":{}}}", BASE64_STANDARD.encode(&data), alive)),
+                None => (200, "{\"data\":\"\",\"alive\":false}".into()),
+            }
+        }
         "/api/term/input" => {
             let (Some(sid), Some(data)) = (field(&v, "session"), field(&v, "data")) else {
                 return bad("session, data required");
@@ -874,15 +883,6 @@ pub fn serve(host: &str, port: u16, root: &Path) -> io::Result<()> {
                     None => json_response(400, "{\"error\":\"compose required or outside root\"}".into()),
                 }
             }
-            // Interactive terminal output: long-poll drains buffered PTY bytes
-            // (base64) so the browser terminal can render them.
-            (Method::Get, "/api/term/read") => match query_param(&query, "session") {
-                Some(sid) => match term::read(&sid, 500) {
-                    Some((data, alive)) => json_response(200, format!("{{\"data\":\"{}\",\"alive\":{}}}", BASE64_STANDARD.encode(&data), alive)),
-                    None => json_response(200, "{\"data\":\"\",\"alive\":false}".into()),
-                },
-                None => json_response(400, "{\"error\":\"session required\"}".into()),
-            },
             // Bundled terminal emulator (xterm.js) — served from the binary; the
             // strict same-host model means no CDN.
             (Method::Get, "/assets/xterm.js") => Response::from_string(include_str!("assets/xterm.js")).with_header(header("Content-Type", "application/javascript; charset=utf-8")),

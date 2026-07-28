@@ -42,9 +42,39 @@ pub trait HostFsMut {
 
 /// Apply `action` — but only when `confirmed`. Without confirmation the function
 /// performs no side effect and returns [`ApplyOutcome::Skipped`].
+/// Critical system paths yd will never create/chown/chmod, even on explicit
+/// confirmation — a typo or hostile compose naming `/etc` as a bind source must
+/// not let `yd fix` chown it. Exact-match only, so legitimate data binds under a
+/// subpath (e.g. `/etc/myapp`, `/srv/data`, `/var/lib/x`) are unaffected.
+const PROTECTED_PATHS: &[&str] = &[
+    "/", "/etc", "/usr", "/bin", "/sbin", "/boot", "/lib", "/lib64", "/sys",
+    "/proc", "/dev", "/run", "/var/run", "/root", "/usr/bin", "/usr/sbin", "/usr/lib",
+];
+
+fn action_path(a: &FixAction) -> &str {
+    match a {
+        FixAction::CreateDir { path, .. }
+        | FixAction::Chown { path, .. }
+        | FixAction::Chmod { path, .. } => path,
+    }
+}
+
+/// True for an exact critical system root (after normalising separators + a
+/// trailing slash).
+pub fn is_protected_path(path: &str) -> bool {
+    let n = path.replace('\\', "/");
+    let n = n.trim_end_matches('/');
+    let n = if n.is_empty() { "/" } else { n };
+    PROTECTED_PATHS.contains(&n)
+}
+
 pub fn apply_fix(action: &FixAction, confirmed: bool, fs: &dyn HostFsMut) -> ApplyOutcome {
     if !confirmed {
         return ApplyOutcome::Skipped;
+    }
+    let path = action_path(action);
+    if is_protected_path(path) {
+        return ApplyOutcome::Failed(format!("refusing to modify protected system path {path}"));
     }
     let result = match action {
         FixAction::CreateDir { path, owner } => fs.create_dir(path, *owner),
@@ -190,6 +220,24 @@ mod tests {
                 gid: 1000,
             }]
         );
+    }
+
+    #[test]
+    fn refuses_protected_system_paths_even_when_confirmed() {
+        let fs = RecordingFs::default();
+        for p in ["/etc", "/", "/var/run", "/usr/bin", "/etc/"] {
+            let action = FixAction::Chown { path: p.into(), uid: 0, gid: 0 };
+            assert!(
+                matches!(apply_fix(&action, true, &fs), ApplyOutcome::Failed(_)),
+                "must refuse {p}"
+            );
+        }
+        assert!(fs.calls.borrow().is_empty(), "no fs call for a protected path");
+        // a legitimate data subpath is still allowed
+        assert!(is_protected_path("/etc"));
+        assert!(!is_protected_path("/etc/myapp"));
+        assert!(!is_protected_path("/srv/data"));
+        assert!(!is_protected_path("/var/lib/postgresql"));
     }
 
     #[test]

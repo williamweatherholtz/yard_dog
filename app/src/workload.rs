@@ -23,10 +23,12 @@ pub fn parse_services(yaml: &str) -> Vec<ServiceView> {
         return out;
     };
     for (name, svc) in services {
+        // A *data* mount (writable volume) keys the cautious update path. A
+        // read-only mount (e.g. a config file `:ro`) is not data, so it does not.
         let has_persistent_mount = svc
             .get("volumes")
             .and_then(|v| v.as_sequence())
-            .map(|s| !s.is_empty())
+            .map(|seq| seq.iter().any(is_data_volume))
             .unwrap_or(false);
         out.push(ServiceView {
             name: name.as_str().unwrap_or_default().to_string(),
@@ -35,6 +37,24 @@ pub fn parse_services(yaml: &str) -> Vec<ServiceView> {
         });
     }
     out
+}
+
+/// Whether a compose volume entry is a writable data mount (not read-only).
+fn is_data_volume(v: &serde_yaml::Value) -> bool {
+    match v {
+        serde_yaml::Value::String(s) => {
+            // short syntax SRC:DST[:MODE]; read-only iff a MODE field is `ro`.
+            let parts: Vec<&str> = s.split(':').collect();
+            let read_only =
+                parts.len() >= 3 && parts[parts.len() - 1].split(',').any(|m| m.trim() == "ro");
+            !read_only
+        }
+        // long syntax: `read_only: true` marks it non-data.
+        serde_yaml::Value::Mapping(_) => {
+            !v.get("read_only").and_then(|x| x.as_bool()).unwrap_or(false)
+        }
+        _ => true,
+    }
 }
 
 #[cfg(test)]
@@ -51,5 +71,15 @@ mod tests {
         let web = views.iter().find(|v| v.name == "web").unwrap();
         assert_eq!(web.image.as_deref(), Some("nginx:1.27"));
         assert!(!web.has_persistent_mount, "web has no volume");
+    }
+
+    #[test]
+    fn read_only_config_mount_is_not_a_data_mount() {
+        let yaml = "services:\n  web:\n    image: nginx:1.27\n    volumes:\n      - ./nginx.conf:/etc/nginx/nginx.conf:ro\n  app:\n    image: app:1\n    volumes:\n      - ./data:/data\n";
+        let views = parse_services(yaml);
+        let web = views.iter().find(|v| v.name == "web").unwrap();
+        assert!(!web.has_persistent_mount, "a :ro config mount is not data → auto-update ok");
+        let app = views.iter().find(|v| v.name == "app").unwrap();
+        assert!(app.has_persistent_mount, "a writable bind is data → notify-only");
     }
 }
