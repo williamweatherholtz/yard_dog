@@ -1,0 +1,12 @@
+services:
+  cache:
+    image: redis:7-alpine
+    restart: unless-stopped
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+    volumes:
+      - cache-data:/data     # named volume
+volumes:
+  cache-data:

@@ -140,6 +140,10 @@
 const $ = (s,r=document)=>r.querySelector(s);
 const el=(t,c,txt)=>{const e=document.createElement(t); if(c)e.className=c; if(txt!=null)e.textContent=txt; return e;};
 let stacks=[], current=null, tab="overview", detail=null;
+// Unsaved compose edits, keyed by stack path. The editor content lives HERE, not
+// just in the DOM, so switching tabs (which re-renders #tabbody) never loses it —
+// including for a brand-new stack the server has no file for yet.
+let drafts={};
 const TABS=[["overview","Overview"],["compose","Compose"],["history","History"],["mounts","Mounts"],["permissions","Permissions"],["backups","Backups"],["logs","Logs"]];
 
 $("#theme").onclick=()=>{const n=document.documentElement.getAttribute("data-theme");const nx=n==="dark"?"light":(n==="light"?"dark":(matchMedia("(prefers-color-scheme: dark)").matches?"light":"dark"));document.documentElement.setAttribute("data-theme",nx);};
@@ -194,11 +198,19 @@ function renderShell(){
   m.append(tabs);
   const body=el("div"); body.id="tabbody"; m.append(body);
   ({overview:renderOverview,compose:renderCompose,history:renderHistory,mounts:renderMounts,permissions:renderPermissions,backups:renderBackups,logs:renderLogs}[tab]||renderSoon)();
-  // console lives under every tab
-  const c=el("section","console"); c.append(el("h3",null,"Output")); const pre=el("pre"); pre.id="console"; pre.append(el("span","dim","Actions print here.")); c.append(pre); m.append(c);
+  // console lives under every tab; replay the buffer so output survives tab switches
+  const c=el("section","console"); c.append(el("h3",null,"Output")); const pre=el("pre"); pre.id="console"; renderConsole(pre); c.append(pre); m.append(c);
 }
 function renderSoon(){ $("#tabbody").append(el("p","empty","This view is coming soon — the roadmap use case is recorded.")); }
-function logLine(cls,text){ const pre=$("#console"); if(!pre)return; if(pre.firstChild&&pre.firstChild.className==="dim")pre.innerHTML=""; pre.append(el("span",cls,text+"\n")); pre.scrollTop=pre.scrollHeight; }
+// Output console is a persistent buffer, so action results survive tab switches
+// (renderShell rebuilds the DOM). Replayed wherever a #console pre is mounted.
+let consoleBuf=[];
+function renderConsole(pre){ pre.innerHTML="";
+  if(!consoleBuf.length){ pre.append(el("span","dim","Actions print here.")); return; }
+  for(const l of consoleBuf) pre.append(el("span",l.cls,l.text+"\n"));
+  pre.scrollTop=pre.scrollHeight;
+}
+function logLine(cls,text){ consoleBuf.push({cls,text}); if(consoleBuf.length>250)consoleBuf.shift(); const pre=$("#console"); if(pre)renderConsole(pre); }
 
 // ---- Overview ----
 function renderOverview(){
@@ -250,21 +262,29 @@ async function refreshStatus(){
 // ---- Compose editor ----
 async function renderCompose(){
   const b=$("#tabbody");
-  const {data}=await api("/api/compose?compose="+encodeURIComponent(current));
+  const forCompose=current;
+  // Prefer an in-progress draft; otherwise load the saved compose and seed one.
+  let yaml=drafts[forCompose];
+  if(yaml===undefined){
+    const {data}=await api("/api/compose?compose="+encodeURIComponent(forCompose));
+    yaml=(data&&data.yaml)||""; drafts[forCompose]=yaml;
+  }
+  if(current!==forCompose) return; // user navigated away while we were loading
   const row=el("div","editrow");
   const main=el("div","col-main");
-  const ta=el("textarea","editor"); ta.id="editor"; ta.value=(data&&data.yaml)||""; ta.spellcheck=false; main.append(ta);
+  const ta=el("textarea","editor"); ta.id="editor"; ta.value=yaml; ta.spellcheck=false; main.append(ta);
   const bar=el("div","actionbar"); bar.style.marginTop="12px";
   const save=el("button","","Save (snapshot)"); save.onclick=()=>saveCompose(false); bar.append(save);
   const saveDep=el("button","primary","Save & deploy"); saveDep.onclick=()=>saveCompose(true); bar.append(saveDep);
   main.append(bar); row.append(main);
   const side=el("div","validate"); side.id="vpanel"; side.append(el("div","muted","Validating…")); row.append(side);
   b.append(row);
-  let t; ta.addEventListener("input",()=>{clearTimeout(t); t=setTimeout(validateEditor,400);});
+  let t; ta.addEventListener("input",()=>{drafts[forCompose]=ta.value; clearTimeout(t); t=setTimeout(validateEditor,400);});
   validateEditor();
 }
 async function validateEditor(){
-  const yaml=$("#editor").value; const p=$("#vpanel"); p.innerHTML="";
+  const ed=$("#editor"), p=$("#vpanel"); if(!ed||!p) return; // navigated away before the debounce fired
+  const yaml=ed.value; p.innerHTML="";
   const {data}=await post("/api/validate",{yaml});
   p.append(el("div","v-badge "+"badge "+(data.ready?"ready":"notready"),data.ready?"READY":"NOT READY"));
   p.append(el("div","muted",`${data.blocks} blocking · ${data.warns} warning${data.warns===1?"":"s"}`));
@@ -274,6 +294,7 @@ async function saveCompose(deploy){
   logLine("cmd","▶ save"+(deploy?" & deploy":""));
   const {data}=await post("/api/save",{compose:current,yaml:$("#editor").value});
   if(!data.ok){ logLine("bad","✗ "+(data.error||"save failed")); return; }
+  drafts[current]=$("#editor").value; // draft is now the saved truth
   logLine("ok","✓ saved (snapshot "+((data.sha||"").slice(0,8))+")");
   if(deploy) await doAct("/api/deploy",{compose:current},"deploy");
   loadStacks();
@@ -291,7 +312,7 @@ async function renderHistory(){
     li.append(el("span","msg",it.message||""));
     const dbtn=el("button","","Diff vs current"); dbtn.onclick=()=>showDiff(it.sha,null); li.append(dbtn);
     if(i+1<items.length){ const pd=el("button","","Diff vs prev"); pd.onclick=()=>showDiff(items[i+1].sha,it.sha); li.append(pd); }
-    const rb=el("button","danger","Restore"); rb.onclick=()=>confirmAct("Restore this version? Current state is snapshotted first; you can then redeploy from Overview.","/api/restore",{compose:current,sha:it.sha},"restore "+(it.sha||"").slice(0,8)).then(()=>selectStack(current,true)); li.append(rb);
+    const rb=el("button","danger","Restore"); rb.onclick=()=>confirmAct("Restore this version? Current state is snapshotted first; you can then redeploy from Overview.","/api/restore",{compose:current,sha:it.sha},"restore "+(it.sha||"").slice(0,8)).then(()=>{delete drafts[current]; selectStack(current,true);}); li.append(rb);
     ul.append(li);
   });
   b.append(ul);
@@ -390,7 +411,7 @@ async function renderFleet(attentionOnly){
     tbl.append(tr);
   }
   m.append(tbl);
-  const c=el("section","console"); c.append(el("h3",null,"Output")); const pre=el("pre"); pre.id="console"; pre.append(el("span","dim","Bulk action results appear here.")); c.append(pre); m.append(c);
+  const c=el("section","console"); c.append(el("h3",null,"Output")); const pre=el("pre"); pre.id="console"; renderConsole(pre); c.append(pre); m.append(c);
   // lazily load expensive status (drift/updates) per row
   for(const s of rows) loadFleetStatus(s.compose);
 }
@@ -429,7 +450,7 @@ async function renderGit(){
     b("Pull","",()=>doGit("/api/git/pull",{},"pull").then(renderGit));
   }
   m.append(bar);
-  const c=el("section","console"); c.append(el("h3",null,"Output")); const pre=el("pre"); pre.id="console"; pre.append(el("span","dim","Git output appears here.")); c.append(pre); m.append(c);
+  const c=el("section","console"); c.append(el("h3",null,"Output")); const pre=el("pre"); pre.id="console"; renderConsole(pre); c.append(pre); m.append(c);
 }
 async function doGit(path,body,label){
   logLine("cmd","▶ git "+label);
@@ -459,9 +480,8 @@ $("#newstack").onclick=async ()=>{
   const tmpl=kind?templateFor(kind,name):`services:\n  ${name}:\n    image: \n    restart: unless-stopped\n`;
   const rel=name.replace(/\\/g,"/").replace(/\/+$/,"")+"/docker-compose.yml";
   stacks.unshift({name,compose:rel,lifecycle:"draft",services:0,blocks:0,warns:0});
-  current=rel; tab="compose"; renderRail();
+  current=rel; tab="compose"; drafts[rel]=tmpl; renderRail();
   $("#main").innerHTML=""; detail={compose:rel,lifecycle:"draft",ready:true,blocks:0,warns:0,services:[],guardrails:[]}; renderShell();
-  setTimeout(()=>{ const ed=$("#editor"); if(ed){ ed.value=tmpl; validateEditor(); } },50);
 };
 function templateFor(kind,svc){
   const img={datastore:"postgres:16",web:"nginx:1.27-alpine",proxy:"traefik:3.1",worker:"alpine:3.20",cron:"alpine:3.20"}[kind]||"alpine:3.20";

@@ -1,0 +1,10 @@
+services:
+  web:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./html:/usr/share/nginx/html:ro   # existing host bind (created by the harness)
+      - ./missing-dir:/data               # missing host bind (never created)
+    restart: unless-stopped
+    # no healthcheck / mem_limit on purpose -> warn-severity guardrails

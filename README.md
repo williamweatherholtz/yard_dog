@@ -225,6 +225,16 @@ suite additionally proves the full journeys (deploy, rollback, upgrade, backup+
 verify, guardrails, lifecycle) against a real daemon; the Docker-touching cases
 skip gracefully when no daemon is reachable.
 
+The **browser control plane** has its own Playwright end-to-end matrix under
+[`ui-e2e/`](ui-e2e/), driving real `yd serve` in Chromium across every tab and
+interactive element (rail, compose draft persistence, validate, mounts,
+permissions, history, fleet, git, backups, logs, theme):
+```sh
+cd app && cargo build --release      # the UI is embedded in yd; rebuild after editing ui.html
+cd ../ui-e2e && npm install && npx playwright install chromium
+npx playwright test
+```
+
 ---
 
 ## Project tracking
