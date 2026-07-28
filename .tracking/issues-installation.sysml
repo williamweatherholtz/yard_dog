@@ -75,6 +75,17 @@ package YardDogInstallIssues {
         :>> severity = Severity::Medium;
     }
 
+    // -- publish the container image from CI (Sprint 53 follow-up) ------------
+    part issContainerCiPublish : Issue {
+        :>> id = "975e33fe-0c04-4e35-85f1-36ab6065ef45";
+        :>> title = "CI must build + publish the multi-arch container image to GHCR per release";
+        :>> createdAt = "2026-07-27";
+        :>> createdBy = "wweatherholtz";
+        :>> description = "Sprint 53 shipped packaging/docker/{Dockerfile,docker-compose.yml}, proved the image live locally, AND added a `docker-publish` job to release.yml (buildx --platform linux/arm64,linux/amd64 --push to ghcr.io, tagging version + latest). REMAINING (why still open): that job only runs on a version-tag push, so it is written-but-unproven — the ghcr.io/williamweatherholtz/yard-dog:latest image the compose pins does not exist until the next tagged release actually publishes it. Resolve by cutting a release and confirming `docker pull` + `docker compose up -d` work against the published image. Until then `docker compose build` (the compose's build: stanza) is the working path. Correctness lens: don't consider the pull on-ramp done until a real release proves it.";
+        :>> discoveredInField = false;
+        :>> severity = Severity::Medium;
+    }
+
     // -- triage: resolver per issue -------------------------------------------
     action fixInstallScript;
     action fixInstallLinuxPkg;
@@ -82,6 +93,7 @@ package YardDogInstallIssues {
     action fixInstallWindows;
     action decideContainerImage;
     action fixReleaseArchGaps;
+    action fixContainerCiPublish;
 
     #Resolves dependency from fixInstallScript to issInstallScript;
     #Resolves dependency from fixInstallLinuxPkg to issInstallLinuxPkg;
@@ -89,4 +101,5 @@ package YardDogInstallIssues {
     #Resolves dependency from fixInstallWindows to issInstallWindows;
     #Resolves dependency from decideContainerImage to issContainerImage;
     #Resolves dependency from fixReleaseArchGaps to issReleaseArchGaps;
+    #Resolves dependency from fixContainerCiPublish to issContainerCiPublish;
 }

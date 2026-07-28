@@ -11,7 +11,7 @@ package YardDogContainerImageDecision {
         :>> title = "Do not ship a supported container image; the host binary is the install path";
         :>> createdAt = "2026-07-27";
         :>> createdBy = "wweatherholtz";
-        :>> status = DecisionStatus::accepted;
+        :>> status = DecisionStatus::superseded;
         :>> context = "issContainerImage asked whether to publish a container image / compose for running yd itself. yd manages the HOST's Docker, so a containerized yd must mount /var/run/docker.sock — which Yard Dog's own guardrail security lens flags as BLOCK-severity (host-root-equivalent). Shipping a socket-mounting compose would have the tool bless exactly what it warns against, contradicting needSecureByDefault.";
         :>> decision = "Decline to ship a supported container image or a socket-mounting compose. The install path is the host binary (Linux .deb/.rpm, macOS Homebrew, Windows Scoop, the checksum-verifying install script, and self-update). Document the reason so operators understand it is a deliberate security choice, not an oversight.";
         :>> rationale = "Consistency and honesty: the tool must not distribute the very host-root exposure its guardrails block. The host binary needs Docker access anyway (via the daemon), and running as a host binary keeps the trust boundary clear. Chosen by the human operator on 2026-07-27 ('Decline, document why').";

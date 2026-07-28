@@ -61,7 +61,7 @@ Run `yd <command> --help` for full flags. Grouped by what they touch:
 | `yd inspect <compose>` | Classify every mount (host bind / named / anonymous / network) and report existence + remediation. |
 | `yd check <compose>` | Run the preventative policy guardrails over a compose file. |
 | `yd doctor <compose>` | One preflight verdict (READY / NOT READY) from guardrails + lifecycle, with a matching exit code. |
-| `yd serve [--root <dir>] [--port N]` | Serve the loopback-only browser control plane over the stacks under `<dir>` (default `.`, port 8770). |
+| `yd serve [--root <dir>] [--port N] [--host <addr>]` | Serve the browser control plane over the stacks under `<dir>` (default `.`, port 8770). `--host` defaults to `127.0.0.1` (loopback); use `0.0.0.0` only inside a container that publishes to host loopback — the Host allowlist still refuses non-loopback requests. |
 | `yd classify <compose>` | Classify each service into a workload kind (datastore / web / worker / cron / proxy). |
 | `yd updates <compose>` | Show image-update status (real digest check against Docker Hub / GHCR) plus the kind-gated action per service. |
 | `yd drift <compose>` | Report drift between the declared compose and the running stack. |
@@ -140,9 +140,20 @@ Prebuilt binaries (x86_64 + arm64 Linux, arm64 macOS, x86_64 Windows) and
 `SHA256SUMS` are attached to each [GitHub Release](https://github.com/williamweatherholtz/yard_dog/releases).
 Once installed, `yd self-update --apply` keeps it current (also SHA256-verified).
 
-Yard Dog installs as a **host binary** by design — it manages the host's Docker, so
-running it inside a container would require mounting the Docker socket (which its own
-guardrails flag as host-root-equivalent).
+**Container (`docker compose up`)** — the frictionless on-ramp:
+```sh
+# packaging/docker/docker-compose.yml
+YD_ROOT=/srv/stacks YD_PORT=8770 docker compose -f packaging/docker/docker-compose.yml up -d
+# → http://127.0.0.1:8770   (change the port any time via YD_PORT, then re-run `up -d`)
+```
+It **auto-runs** (`restart: unless-stopped` + an HTTP healthcheck) and the port is
+yours to set. It needs the Docker socket **and** your stacks dir mounted at the same
+path, because Yard Dog's path-intelligence and backup/restore read the host
+filesystem — that's real host access, so the **host binary above is the
+lower-exposure, full-feature path we recommend**; the container is the try-it/opt-in
+option. The UI is published to your machine's loopback only, and its Host allowlist
+still refuses any non-loopback request even though the container binds `0.0.0.0`
+internally. See [`packaging/docker/`](packaging/docker/) for the annotated compose.
 
 ## Browser control plane
 

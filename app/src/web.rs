@@ -665,7 +665,7 @@ fn json_response(status: u16, body: String) -> Response<io::Cursor<Vec<u8>>> {
 }
 
 /// Start the loopback control-plane server. Never binds anything but 127.0.0.1.
-pub fn serve(port: u16, root: &Path) -> io::Result<()> {
+pub fn serve(host: &str, port: u16, root: &Path) -> io::Result<()> {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     // The served root IS the monorepo (decGitVersioning): one repo, per-stack
     // snapshots scoped by path. Initialise it once on startup, with an initial
@@ -674,9 +674,16 @@ pub fn serve(port: u16, root: &Path) -> io::Result<()> {
     if gitver::history(&root).map(|h| h.is_empty()).unwrap_or(true) {
         let _ = gitver::snapshot(&root, "yd: initialize config repo");
     }
-    let server = Server::http(("127.0.0.1", port))
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("cannot bind 127.0.0.1:{port}: {e}")))?;
-    println!("Yard Dog control plane on http://127.0.0.1:{port}  (loopback only — Ctrl-C to stop)");
+    let server = Server::http((host, port))
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("cannot bind {host}:{port}: {e}")))?;
+    if host == "127.0.0.1" || host == "localhost" {
+        println!("Yard Dog control plane on http://{host}:{port}  (loopback only — Ctrl-C to stop)");
+    } else {
+        // Non-loopback bind: intended for a container whose port is published to the
+        // host's loopback. The Host allowlist below still refuses any non-loopback
+        // Host header, so this does not open LAN access on its own.
+        println!("Yard Dog control plane bound on {host}:{port}  (Host allowlist still enforces loopback — Ctrl-C to stop)");
+    }
     println!("serving stacks under {}", root.display());
 
     for mut request in server.incoming_requests() {

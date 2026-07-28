@@ -1,0 +1,5 @@
+# Only app/ source is needed by the build; keep the context tiny and reproducible.
+*
+!app
+app/target
+**/.git

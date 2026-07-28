@@ -1,0 +1,37 @@
+# Yard Dog — run the browser control plane as a container.
+#
+#   docker compose up -d          # start, and keep it running across reboots
+#   docker compose logs -f        # watch it come up (waits until healthy)
+#
+# Then open  http://127.0.0.1:8770  (loopback only).
+#
+# WHY it needs the socket AND a host mount: yd manages the HOST's Docker (the
+# socket) and its two differentiators — mount-path intelligence and host-data
+# backup/restore — read the host filesystem (the stacks mount, at the same path so
+# the host daemon resolves bind paths correctly). That's real host access; if you
+# don't need the UI, the host binary (`curl … | sh`) is the lower-exposure option.
+#
+# CHANGE THE PORT any time: set YD_PORT (below or in a .env file) and re-run
+# `docker compose up -d`. Set YD_ROOT to the directory that holds your stacks.
+
+services:
+  yard-dog:
+    image: ghcr.io/williamweatherholtz/yard-dog:latest
+    # Prefer building locally over pulling? `docker compose build` uses this:
+    build:
+      context: ../..
+      dockerfile: packaging/docker/Dockerfile
+    container_name: yard-dog
+    restart: unless-stopped          # auto-run: comes back on failure and on boot
+    environment:
+      YD_ROOT: ${YD_ROOT:-/srv/stacks}
+      YD_PORT: ${YD_PORT:-8770}
+      YD_BIND: 0.0.0.0               # container-internal; published to loopback below
+    ports:
+      # host-loopback : container — the UI is never exposed beyond this machine
+      - "127.0.0.1:${YD_PORT:-8770}:${YD_PORT:-8770}"
+    volumes:
+      # 1) talk to the host Docker daemon
+      - /var/run/docker.sock:/var/run/docker.sock
+      # 2) your stacks dir, mounted at the SAME path so host bind paths resolve
+      - ${YD_ROOT:-/srv/stacks}:${YD_ROOT:-/srv/stacks}

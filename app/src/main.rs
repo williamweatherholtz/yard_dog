@@ -178,9 +178,14 @@ enum Command {
         /// Directory whose stacks the UI manages (defaults to the current dir).
         #[arg(long, default_value = ".")]
         root: String,
-        /// TCP port on 127.0.0.1 (loopback only).
+        /// TCP port for the control plane.
         #[arg(long, default_value_t = 8770)]
         port: u16,
+        /// Bind address. Default 127.0.0.1 (loopback). Use 0.0.0.0 ONLY inside a
+        /// container whose port is published to the host's loopback — the Host
+        /// allowlist still refuses any non-loopback Host, so this never opens LAN.
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
     },
     /// Preflight a stack: one go/no-go verdict from guardrails + lifecycle.
     Doctor {
@@ -335,8 +340,8 @@ fn main() {
         Command::Fleet { action } => run_fleet(action),
         Command::SelfUpdate { apply } => run_self_update(apply),
         Command::Restore { file, from, yes } => run_restore(&file, &from, yes),
-        Command::Serve { root, port } => {
-            yarddog::web::serve(port, std::path::Path::new(&root)).map_err(|e| e.to_string())
+        Command::Serve { root, port, host } => {
+            yarddog::web::serve(&host, port, std::path::Path::new(&root)).map_err(|e| e.to_string())
         }
         Command::Doctor { file } => run_doctor(&file),
         Command::New { into, name, kind, service } => run_new(&into, &name, &kind, service.as_deref()),
