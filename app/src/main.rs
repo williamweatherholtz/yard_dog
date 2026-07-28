@@ -157,6 +157,15 @@ enum Command {
         #[arg(long)]
         apply: bool,
     },
+    /// Sign a file with the release ed25519 key (hex), writing <file>.sig. Used by
+    /// CI with the YD_SIGNING_KEY secret; not for day-to-day use.
+    #[command(hide = true)]
+    SignRelease {
+        #[arg(long)]
+        file: String,
+        #[arg(long)]
+        key_hex: String,
+    },
     /// Restore a stack's bind-mounted DATA from a backup (verify-gated; --yes to apply).
     Restore {
         /// Path to the docker-compose file.
@@ -330,6 +339,7 @@ fn main() {
         Command::Git { action } => run_git(action),
         Command::Fleet { action } => run_fleet(action),
         Command::SelfUpdate { apply } => run_self_update(apply),
+        Command::SignRelease { file, key_hex } => run_sign_release(&file, &key_hex),
         Command::Restore { file, from, yes } => run_restore(&file, &from, yes),
         Command::Serve { root, port, host } => {
             yarddog::web::serve(&host, port, std::path::Path::new(&root)).map_err(|e| e.to_string())
@@ -726,6 +736,9 @@ fn run_self_update(apply: bool) -> Result<(), String> {
         return Ok(());
     }
 
+    if yarddog::selfupdate::RELEASE_PUBKEY_HEX.is_empty() {
+        println!("note: releases are not yet signed — verifying integrity by SHA256 only");
+    }
     let exe = std::env::current_exe().map_err(|e| format!("cannot locate current exe: {e}"))?;
     match perform_update(&gh, current, &exe).map_err(|e| format!("update failed: {e}"))? {
         ApplyOutcome::UpToDate => println!("yd {current}: already up to date"),
@@ -734,8 +747,21 @@ fn run_self_update(apply: bool) -> Result<(), String> {
         }
         ApplyOutcome::NoAsset(a) => return Err(format!("no release asset '{a}' for this platform")),
         ApplyOutcome::ChecksumMismatch => return Err("SHA256 verification failed — refusing to install".into()),
+        ApplyOutcome::SignatureInvalid => {
+            return Err("release signature missing or invalid — refusing to install".into())
+        }
         ApplyOutcome::Unreachable => return Err(format!("could not reach {RELEASE_REPO} releases")),
     }
+    Ok(())
+}
+
+fn run_sign_release(file: &str, key_hex: &str) -> Result<(), String> {
+    let bytes = std::fs::read(file).map_err(|e| format!("reading {file}: {e}"))?;
+    let sig = yarddog::selfupdate::sign_hex(key_hex.trim(), &bytes)
+        .ok_or("invalid signing key (want 64 hex chars = 32-byte ed25519 seed)")?;
+    let out = format!("{file}.sig");
+    std::fs::write(&out, sig).map_err(|e| format!("writing {out}: {e}"))?;
+    println!("signed {file} -> {out}");
     Ok(())
 }
 

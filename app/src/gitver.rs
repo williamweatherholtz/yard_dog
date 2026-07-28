@@ -16,6 +16,7 @@ const BOT_EMAIL: &str = "noreply@yarddog.local";
 /// subdir is not; data FILES (.env, *.sqlite, *.db, secrets) are excluded anywhere.
 const GITIGNORE: &str = "# Yard Dog: never version data or secrets\n\
 .yd-backups/\n\
+.yd-git.lock\n\
 .env\n\
 *.env\n\
 *.secret\n\
@@ -34,6 +35,37 @@ secrets/\n\
 *.mdb\n";
 
 const GITATTRIBUTES: &str = "* text=auto eol=lf\n";
+
+/// A cross-process advisory lock on a repo's git index. The web server's
+/// in-process git ops AND spawned `yd` subprocesses (deploy/backup) all take it,
+/// so concurrent mutations of the shared monorepo index serialize — held only for
+/// the git step, not a whole deploy, so different stacks aren't blocked.
+struct IndexLock(std::path::PathBuf);
+impl Drop for IndexLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+fn acquire_index_lock(root: &Path) -> IndexLock {
+    let path = root.join(".yd-git.lock");
+    let start = std::time::Instant::now();
+    loop {
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(_) => return IndexLock(path),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                // Held by another process — wait; break a stale lock after 30s.
+                if start.elapsed() > std::time::Duration::from_secs(30) {
+                    let _ = std::fs::remove_file(&path);
+                    continue;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(40));
+            }
+            // If we can't even create it (e.g. read-only fs), proceed unlocked
+            // rather than hang — correctness degrades to the pre-lock behavior.
+            Err(_) => return IndexLock(path),
+        }
+    }
+}
 
 /// Run a git command in `dir` with the bot identity (no global config needed).
 fn git_ok(dir: &Path, args: &[&str]) -> io::Result<String> {
@@ -108,6 +140,7 @@ pub fn ensure_repo(dir: &Path) -> io::Result<()> {
 
 /// Commit the current config as a snapshot; returns the commit sha.
 pub fn snapshot(dir: &Path, message: &str) -> io::Result<String> {
+    let _lock = acquire_index_lock(dir);
     git_ok(dir, &["add", "-A"])?;
     // Nothing staged => a deploy with no config change; committing would fail,
     // so treat it as a no-op and return the current HEAD.
@@ -137,6 +170,7 @@ pub fn history(dir: &Path) -> io::Result<Vec<(String, String)>> {
 /// Restore the working tree to match `sha` and record it as a NEW commit
 /// (HEAD advances; never a detached checkout). Returns the new commit sha.
 pub fn restore(dir: &Path, sha: &str) -> io::Result<String> {
+    let _lock = acquire_index_lock(dir);
     // Bring tracked paths back to their state at `sha` (index + worktree),
     // without moving HEAD, then commit the result as a new snapshot.
     git_ok(dir, &["checkout", sha, "--", "."])?;
@@ -203,6 +237,7 @@ pub fn repo_root(start: &Path) -> Option<PathBuf> {
 /// Snapshot only the config under `rel` within the root repo. A no-op (nothing
 /// changed under `rel`) returns the current HEAD instead of failing.
 pub fn snapshot_scoped(root: &Path, rel: &Path, message: &str) -> io::Result<String> {
+    let _lock = acquire_index_lock(root);
     let sp = spec(rel);
     git_ok(root, &["add", "-A", "--", &sp])?;
     if git_ok(root, &["status", "--porcelain", "--", &sp])?.trim().is_empty() {
@@ -237,6 +272,7 @@ pub fn diff_scoped(root: &Path, rel: &Path, from: &str, to: Option<&str>) -> io:
 /// Restore the config under `rel` to its state at `sha` (removing files added
 /// under `rel` after `sha`), recorded as a new commit. Returns the new sha.
 pub fn restore_scoped(root: &Path, rel: &Path, sha: &str) -> io::Result<String> {
+    let _lock = acquire_index_lock(root);
     let sp = spec(rel);
     // What existed under `rel` at the target sha (NUL-terminated so non-ASCII /
     // special filenames aren't quote-mangled). Empty ⇒ the stack didn't exist at
@@ -304,7 +340,10 @@ pub fn pull(root: &Path) -> io::Result<String> {
 /// (ahead, behind) commit counts vs `origin/<branch>` after a fetch, or `None`
 /// if there is no remote / upstream to compare against.
 pub fn ahead_behind(root: &Path) -> Option<(usize, usize)> {
-    git_ok(root, &["fetch", "origin"]).ok()?;
+    // Best-effort refresh — a failed fetch (offline/auth) shouldn't collapse to
+    // "in sync"; fall back to the last-known tracking ref so counts are stale, not
+    // silently zero. `None` is then reserved for "no upstream configured".
+    let _ = git_ok(root, &["fetch", "origin"]);
     let branch = current_branch(root).ok()?;
     let out = git_ok(root, &["rev-list", "--left-right", "--count", &format!("origin/{branch}...HEAD")]).ok()?;
     let mut it = out.split_whitespace();

@@ -232,7 +232,56 @@ pub enum ApplyOutcome {
     Updated { from: String, to: String, backup: PathBuf },
     NoAsset(String),
     ChecksumMismatch,
+    /// A signing key is configured but the release's signature is missing/invalid.
+    SignatureInvalid,
     Unreachable,
+}
+
+/// The ed25519 public key (64 hex chars) that release `SHA256SUMS` files are
+/// signed with. EMPTY = signing not yet provisioned → checksum-only (integrity,
+/// not authenticity), and self-update prints an "unsigned" note. Once the operator
+/// runs keygen and pastes the public key here (and adds the private key as the CI
+/// `YD_SIGNING_KEY` secret so release.yml can produce `SHA256SUMS.sig`), the update
+/// path REQUIRES a valid signature — defeating a GitHub-release-write compromise.
+pub const RELEASE_PUBKEY_HEX: &str = "";
+
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim();
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
+}
+
+/// Sign `msg` with a hex-encoded ed25519 private key (32-byte seed), returning a
+/// hex signature. Used by CI (`yd sign-release`) with the `YD_SIGNING_KEY` secret.
+pub fn sign_hex(private_key_hex: &str, msg: &[u8]) -> Option<String> {
+    use ed25519_dalek::{Signer, SigningKey};
+    let seed: [u8; 32] = hex_decode(private_key_hex)?.try_into().ok()?;
+    let sk = SigningKey::from_bytes(&seed);
+    Some(sk.sign(msg).to_bytes().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// The hex ed25519 public key for a hex private key (for keygen output).
+pub fn public_key_hex(private_key_hex: &str) -> Option<String> {
+    use ed25519_dalek::SigningKey;
+    let seed: [u8; 32] = hex_decode(private_key_hex)?.try_into().ok()?;
+    Some(SigningKey::from_bytes(&seed).verifying_key().as_bytes().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Verify a detached ed25519 signature (hex) over `msg` with a hex public key.
+pub fn verify_ed25519(pubkey_hex: &str, msg: &[u8], sig_hex: &str) -> bool {
+    use ed25519_dalek::{Signature, VerifyingKey};
+    let (Some(pk), Some(sig)) = (hex_decode(pubkey_hex), hex_decode(sig_hex)) else {
+        return false;
+    };
+    let Ok(pk32): Result<[u8; 32], _> = pk.try_into() else {
+        return false;
+    };
+    let (Ok(vk), Ok(signature)) = (VerifyingKey::from_bytes(&pk32), Signature::from_slice(&sig)) else {
+        return false;
+    };
+    vk.verify_strict(msg, &signature).is_ok()
 }
 
 /// Download the platform asset for the latest release, verify its SHA256 against
@@ -261,6 +310,20 @@ pub fn perform_update(
     if !verify_sha256(&bin, &expected) {
         return Ok(ApplyOutcome::ChecksumMismatch);
     }
+    // Authenticity: when a signing key is configured, the SHA256SUMS must carry a
+    // valid ed25519 signature (SHA256SUMS.sig) — so a release-write compromise
+    // that swaps both the binary and its checksums is still rejected.
+    if !RELEASE_PUBKEY_HEX.is_empty() {
+        let Some(sig_url) = release.asset_url("SHA256SUMS.sig") else {
+            return Ok(ApplyOutcome::SignatureInvalid);
+        };
+        let Some(sig) = gh.download(sig_url).and_then(|b| String::from_utf8(b).ok()) else {
+            return Ok(ApplyOutcome::SignatureInvalid);
+        };
+        if !verify_ed25519(RELEASE_PUBKEY_HEX, sums.as_bytes(), sig.trim()) {
+            return Ok(ApplyOutcome::SignatureInvalid);
+        }
+    }
     let backup = apply_update(current_exe, &bin)?;
     Ok(ApplyOutcome::Updated {
         from: current_version.to_string(),
@@ -272,6 +335,28 @@ pub fn perform_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ed25519_verifies_and_rejects_tampering() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let sk = SigningKey::from_bytes(&[7u8; 32]);
+        let hexed = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        let vk_hex = hexed(sk.verifying_key().as_bytes());
+        let msg = b"SHA256SUMS file contents";
+        let sig_hex = hexed(&sk.sign(msg).to_bytes());
+        assert!(verify_ed25519(&vk_hex, msg, &sig_hex), "valid signature accepted");
+        assert!(!verify_ed25519(&vk_hex, b"tampered contents", &sig_hex), "tampered message rejected");
+        assert!(!verify_ed25519(&vk_hex, msg, "0000"), "malformed signature rejected");
+        assert!(!verify_ed25519("", msg, &sig_hex), "empty key rejected");
+    }
+
+    #[test]
+    fn prerelease_ordering() {
+        assert!(version_is_newer("1.0.0-rc1", "1.0.0"), "GA supersedes its prerelease");
+        assert!(!version_is_newer("1.0.0", "1.0.0-rc1"), "prerelease is not newer than GA");
+        assert!(version_is_newer("1.0.0", "1.0.1"));
+        assert!(!version_is_newer("1.0.0", "1.0.0"));
+    }
 
     struct Src(Option<&'static str>);
     impl ReleaseSource for Src {

@@ -189,6 +189,19 @@ jobs:
           mkdir -p dist
           find staging -type f -exec cp {} dist/ \;
           cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: Sign SHA256SUMS (only if a signing key is configured)
+        env:
+          YD_SIGNING_KEY: ${{ secrets.YD_SIGNING_KEY }}
+        shell: bash
+        run: |
+          if [ -n "$YD_SIGNING_KEY" ]; then
+            bin="staging/yd-x86_64-linux/yd-x86_64-linux"
+            chmod +x "$bin"
+            "$bin" sign-release --file dist/SHA256SUMS --key-hex "$YD_SIGNING_KEY"
+            ls -la dist/SHA256SUMS.sig
+          else
+            echo "no YD_SIGNING_KEY secret set — this release is unsigned (checksum only)"
+          fi
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*

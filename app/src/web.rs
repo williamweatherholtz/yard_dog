@@ -16,12 +16,35 @@ use crate::remediation::Issue;
 use crate::{compose, gitver, guardrails, hostfs, lifecycle, preflight, registry, report, stacks, stats, term, updates, verify, workload};
 use base64::prelude::{Engine as _, BASE64_STANDARD};
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
-/// Global lock serializing mutating git/stack operations (see the serve loop).
-fn mutation_lock() -> &'static Mutex<()> {
+/// Global lock for repo-wide mutations (git remote sync, fleet ops).
+fn global_lock() -> &'static Mutex<()> {
     static L: OnceLock<Mutex<()>> = OnceLock::new();
     L.get_or_init(|| Mutex::new(()))
+}
+
+/// Per-stack lock so operations on ONE stack serialize (no same-stack deploy/
+/// backup race) while DIFFERENT stacks run concurrently. The shared monorepo git
+/// index is serialized separately, cross-process, inside gitver.
+fn stack_lock(key: &str) -> Arc<Mutex<()>> {
+    static M: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+    let map = M.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut g = map.lock().unwrap_or_else(|e| e.into_inner());
+    g.entry(key.to_string()).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
+}
+
+/// The stack a mutation targets (parent dir of its `compose`), for per-stack
+/// locking. Falls back to a single shared bucket when there is no compose field.
+fn stack_key(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            v.get("compose").and_then(|c| c.as_str()).map(|s| {
+                Path::new(s).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
+            })
+        })
+        .unwrap_or_else(|| "_".to_string())
 }
 use std::io;
 use std::path::{Path, PathBuf};
@@ -944,7 +967,6 @@ pub fn serve(host: &str, port: u16, root: &Path) -> io::Result<()> {
                 if !mutation_allowed(content_type.as_deref(), origin.as_deref()) {
                     json_response(415, "{\"error\":\"mutations require application/json from a loopback origin\"}".into())
                 } else {
-                    let mut body = String::new();
                     // Cap the body so a local client can't OOM the server (or, via
                     // /api/save, write an unbounded file) with a giant POST.
                     const MAX_BODY: usize = 8 * 1024 * 1024;
@@ -958,16 +980,23 @@ pub fn serve(host: &str, port: u16, root: &Path) -> io::Result<()> {
                             Err(_) => break,
                         }
                     }
-                    body = String::from_utf8_lossy(&bytes).into_owned();
+                    let body = String::from_utf8_lossy(&bytes).into_owned();
                     // Serialize MUTATING git/stack actions behind one global lock —
                     // the monorepo shares a single .git/index, and the old
                     // sequential loop was the de-facto serializer that
                     // thread-per-request removed. Terminal I/O stays concurrent
                     // (it must not block on a long deploy) and reads are GET.
                     let (status, json) = if p.starts_with("/api/term/") {
+                        // terminal I/O must stay concurrent (never block on a deploy)
+                        handle_action(&root, p, &body)
+                    } else if p.starts_with("/api/git/") || p.starts_with("/api/fleet/") {
+                        let _g = global_lock().lock().unwrap_or_else(|e| e.into_inner());
                         handle_action(&root, p, &body)
                     } else {
-                        let _guard = mutation_lock().lock().unwrap_or_else(|e| e.into_inner());
+                        // stack-scoped: serialize per stack so a long deploy of one
+                        // stack no longer blocks mutations to others.
+                        let lock = stack_lock(&stack_key(&body));
+                        let _g = lock.lock().unwrap_or_else(|e| e.into_inner());
                         handle_action(&root, p, &body)
                     };
                     json_response(status, json)
