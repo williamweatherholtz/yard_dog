@@ -473,6 +473,38 @@ fn backup_resolves_relative_paths_from_any_cwd() {
 }
 
 #[test]
+fn backup_then_restore_round_trip_recovers_bind_data() {
+    // The data-loss-critical path, end-to-end and WITHOUT Docker (bind data is a
+    // host-fs copy). Back up, corrupt the live data, restore, assert recovery.
+    let stack = tempfile::tempdir().unwrap();
+    std::fs::create_dir(stack.path().join("html")).unwrap();
+    std::fs::write(stack.path().join("html").join("index.html"), b"original").unwrap();
+    let compose = stack.path().join("docker-compose.yml");
+    std::fs::write(&compose, "services:\n  web:\n    image: nginx:1.27\n    volumes:\n      - ./html:/usr/share/nginx/html\n").unwrap();
+
+    Command::cargo_bin("yd")
+        .unwrap()
+        .args(["backup", compose.to_str().unwrap(), "--run", "--dest", "bak"])
+        .assert()
+        .success();
+    let bak = stack.path().join("bak");
+    assert!(bak.join("manifest.json").exists(), "backup wrote a manifest");
+
+    // Corrupt the live bind data.
+    std::fs::write(stack.path().join("html").join("index.html"), b"CORRUPTED").unwrap();
+
+    // Restore (verify-gated) applies with --yes.
+    Command::cargo_bin("yd")
+        .unwrap()
+        .args(["restore", compose.to_str().unwrap(), "--from", bak.to_str().unwrap(), "--yes"])
+        .assert()
+        .success();
+
+    let restored = std::fs::read_to_string(stack.path().join("html").join("index.html")).unwrap();
+    assert_eq!(restored, "original", "restore must recover the backed-up bind data");
+}
+
+#[test]
 fn self_update_prints_current_version() {
     // Offline-safe: self-update reports "yd <version>: <status>" whether or not
     // the release host is reachable, so assert on the compiled-in version.
@@ -487,7 +519,10 @@ fn drift_runs_and_lists_declared_services() {
     let dir = tempfile::tempdir().unwrap();
     let f = dir.path().join("c.yml");
     std::fs::write(&f, "services:\n  app:\n    image: nginx:1.27\n").unwrap();
-    let a = Command::cargo_bin("yd").unwrap().arg("drift").arg(f.to_str().unwrap()).assert().success();
+    // Exit code is environment-dependent: 0 when the running state is unavailable
+    // (no docker → lists declared services), 3 when docker reports the declared
+    // service as not-running (drift). Either way the service must be named.
+    let a = Command::cargo_bin("yd").unwrap().arg("drift").arg(f.to_str().unwrap()).assert();
     let out = String::from_utf8_lossy(&a.get_output().stdout).to_string();
     assert!(out.contains("app"), "got:\n{out}");
 }

@@ -125,6 +125,63 @@ pub fn normalize_image(img: &str) -> String {
     }
 }
 
+/// Parse an image ref into `(repo, tag, digest)` after stripping Hub prefixes.
+/// A tag/digest is only recognized on the final path component (so a registry
+/// `host:port` colon is preserved). Tag defaults to `latest` ONLY when neither a
+/// tag nor a digest is present.
+fn parse_image_ref(img: &str) -> (String, Option<String>, Option<String>) {
+    let mut s = img;
+    for host in ["index.docker.io/", "registry-1.docker.io/", "docker.io/"] {
+        if let Some(r) = s.strip_prefix(host) {
+            s = r;
+            break;
+        }
+    }
+    s = s.strip_prefix("library/").unwrap_or(s);
+    let (before, digest) = match s.split_once('@') {
+        Some((b, d)) => (b, Some(d.to_string())),
+        None => (s, None),
+    };
+    let (path, name) = match before.rsplit_once('/') {
+        Some((p, n)) => (Some(p), n),
+        None => (None, before),
+    };
+    let (name_only, tag) = match name.split_once(':') {
+        Some((n, t)) => (n, Some(t.to_string())),
+        None => (name, None),
+    };
+    let repo = match path {
+        Some(p) => format!("{p}/{name_only}"),
+        None => name_only.to_string(),
+    };
+    let tag = match (tag, &digest) {
+        (Some(t), _) => Some(t),
+        (None, None) => Some("latest".to_string()), // implicit tag, only when no digest
+        (None, Some(_)) => None,
+    };
+    (repo, tag, digest)
+}
+
+/// Whether a declared and a running image ref denote the same image, tolerating
+/// asymmetry: a tag-only declared ref (`nginx:1.27`) matches a digest-qualified
+/// running ref (`nginx:1.27@sha256:…`). Digests win when BOTH carry one (a
+/// same-tag re-push with a new digest is real drift); otherwise compare tags;
+/// otherwise (one tag-only, the other digest-only) we can't prove drift, so match.
+pub fn images_match(declared: &str, running: &str) -> bool {
+    let d = parse_image_ref(declared);
+    let r = parse_image_ref(running);
+    if d.0 != r.0 {
+        return false;
+    }
+    if let (Some(a), Some(b)) = (&d.2, &r.2) {
+        return a == b;
+    }
+    if let (Some(a), Some(b)) = (&d.1, &r.1) {
+        return a == b;
+    }
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriftKind {
     /// Declared in compose but not running.
@@ -158,7 +215,7 @@ pub fn detect_drift(
                 service: service.clone(),
                 kind: DriftKind::Missing,
             }),
-            Some(running_image) if normalize_image(running_image) != normalize_image(declared_image) => out.push(DriftItem {
+            Some(running_image) if !images_match(declared_image, running_image) => out.push(DriftItem {
                 service: service.clone(),
                 kind: DriftKind::ImageChanged {
                     declared: declared_image.clone(),
@@ -203,6 +260,22 @@ mod tests {
         assert_eq!(normalize_image("myreg:5000/app:1.2@sha256:abc"), "myreg:5000/app@sha256:abc");
         // genuinely different images still differ
         assert_ne!(normalize_image("nginx:1.27"), normalize_image("nginx:1.28"));
+    }
+
+    #[test]
+    fn images_match_tolerates_asymmetric_digest() {
+        // tag-only declared vs digest-qualified running (same tag) => NOT drift
+        assert!(images_match("nginx:1.27", "nginx:1.27@sha256:abc"));
+        assert!(images_match("nginx:1.27", "docker.io/library/nginx:1.27@sha256:abc"));
+        // both carry a digest: a same-tag re-push with a new digest IS drift
+        assert!(!images_match("repo:1.2@sha256:aaa", "repo:1.2@sha256:bbb"));
+        assert!(images_match("repo:1.2@sha256:aaa", "repo@sha256:aaa"));
+        // different tags are drift
+        assert!(!images_match("nginx:1.27", "nginx:1.28"));
+        // tag-only vs digest-only (no shared dimension) — can't prove drift => match
+        assert!(images_match("nginx:1.27", "nginx@sha256:abc"));
+        // different repos are always drift
+        assert!(!images_match("nginx:1.27", "redis:1.27"));
     }
 
     fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {

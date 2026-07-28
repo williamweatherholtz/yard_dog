@@ -456,6 +456,8 @@ fn run_drift(file: &str) -> Result<(), String> {
             for i in &items {
                 println!("{}: {:?}", i.service, i.kind);
             }
+            // Drift found — exit non-zero so CI/cron can gate on it (0 = in sync).
+            std::process::exit(3);
         }
         None => {
             println!("running state unavailable — drift check needs docker (planned). Declared services:");
@@ -1003,9 +1005,23 @@ fn run_restore(file: &str, from: &str, yes: bool) -> Result<(), String> {
     let env: HashMap<String, String> = std::env::vars().collect();
     let from_p = std::path::Path::new(from);
     let dest = if from_p.is_absolute() { from_p.to_path_buf() } else { stack_dir.join(from) };
-    match yarddog::backup::restore_bind_data(&yaml, &env, stack_dir, &dest, yes)
-        .map_err(|e| format!("restore failed: {e}"))?
-    {
+    let outcome = match yarddog::backup::restore_bind_data(&yaml, &env, stack_dir, &dest, yes) {
+        Ok(o) => o,
+        // A missing/unparseable manifest is a fail-closed REFUSAL (the backup is
+        // unusable), the same class as a failed verification — exit 3, not the
+        // generic 1, so it matches the documented scheme.
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData
+            ) =>
+        {
+            eprintln!("refused: {e}");
+            std::process::exit(3);
+        }
+        Err(e) => return Err(format!("restore failed: {e}")),
+    };
+    match outcome {
         yarddog::backup::RestoreOutcome::Restored { restored, skipped } => {
             println!("restored {} bind path(s): {:?}", restored.len(), restored);
             if !skipped.is_empty() {
@@ -1050,12 +1066,29 @@ fn run_fleet(action: FleetAction) -> Result<(), String> {
             }
         }
         FleetAction::Backup { root } => {
-            for s in scan(&root) {
-                print!("{}: ", s.name);
-                match run_backup(&s.compose_path.to_string_lossy(), false, true, Some(".yd-backups")) {
+            // Canonicalize every compose path UP FRONT — before the first run_backup
+            // changes the process CWD — so later stacks' relative paths don't resolve
+            // against a previous stack's directory.
+            let abs: Vec<(String, std::path::PathBuf)> = scan(&root)
+                .iter()
+                .map(|s| {
+                    (s.name.clone(), std::fs::canonicalize(&s.compose_path).unwrap_or_else(|_| s.compose_path.clone()))
+                })
+                .collect();
+            let mut failures = 0;
+            for (name, compose) in abs {
+                print!("{name}: ");
+                match run_backup(&compose.to_string_lossy(), false, true, Some(".yd-backups")) {
                     Ok(()) => {}
-                    Err(e) => println!("failed — {e}"),
+                    Err(e) => {
+                        println!("failed — {e}");
+                        failures += 1;
+                    }
                 }
+            }
+            if failures > 0 {
+                // Don't report success when backups failed (CI/cron must see it).
+                return Err(format!("{failures} stack backup(s) failed"));
             }
         }
     }

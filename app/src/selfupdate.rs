@@ -178,9 +178,15 @@ pub fn apply_update(current_exe: &Path, new_bytes: &[u8]) -> io::Result<PathBuf>
     #[cfg(not(unix))]
     {
         // Windows can't overwrite a running exe in place; move it aside then in.
-        std::fs::rename(current_exe, &backup)?;
+        // Clean up the downloaded tmp on every failure path (the running binary is
+        // left intact in all of them).
+        if let Err(e) = std::fs::rename(current_exe, &backup) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
         if let Err(e) = std::fs::rename(&tmp, current_exe) {
             let _ = std::fs::rename(&backup, current_exe); // best-effort restore
+            let _ = std::fs::remove_file(&tmp);
             return Err(e);
         }
         Ok(backup)

@@ -210,7 +210,7 @@ exit-code scheme so scripts and CI can react uniformly:
 |---|---|
 | `0` | Success (deployed / upgraded / cleanly rolled back / skipped / ready / restored). |
 | `2` | Pre-change backup failed — nothing was applied (`deploy`, `upgrade`). |
-| `3` | Blocked / not-ready: a guardrail block (floating tag, plaintext or URL-embedded secret), an unresolvable service, or `doctor`/`check` judging the stack not deploy-ready. |
+| `3` | Blocked / not-ready / refused: a guardrail block (floating tag, plaintext or URL-embedded secret), an unresolvable service, `doctor`/`check` judging the stack not deploy-ready, `restore` refusing an unverifiable backup (missing/tampered manifest or failed verification), or `drift` detecting drift. |
 | `4` | **Critical:** the change failed *and* the rollback redeploy also failed — the live stack needs attention (`deploy`, `upgrade`). |
 
 A successful `deploy`/`upgrade` still prints `note: deployed but health NOT

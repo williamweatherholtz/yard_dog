@@ -299,14 +299,32 @@ fn e2e_uc_backup_verified_restore() {
     // fresh backup verifies clean
     yd().current_dir(dir.path()).args(["verify", "--dest", "bak"]).assert().success();
 
-    // tampering (a changed file) is detected
-    let backed = dir.path().join("bak").join("data").join("photo.jpg");
-    if backed.exists() {
-        std::fs::write(&backed, b"tampered-and-longer").unwrap();
-        yd().current_dir(dir.path()).args(["verify", "--dest", "bak"]).assert().failure();
-    } else {
-        panic!("expected the bind data to be captured under bak/data/photo.jpg");
-    }
+    // The bind data lands in a collision-free `data-<hash>/` subdir.
+    let bak = dir.path().join("bak");
+    let sub = std::fs::read_dir(&bak)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| p.is_dir() && p.file_name().and_then(|n| n.to_str()).map_or(false, |n| n.starts_with("data-")))
+        .expect("bind data captured under bak/data-<hash>/");
+    let backed = sub.join("photo.jpg");
+    assert!(backed.exists(), "photo captured under {}", sub.display());
+
+    // A real restore round-trip: corrupt the live data, restore, assert recovery.
+    std::fs::write(dir.path().join("data").join("photo.jpg"), b"corrupted").unwrap();
+    yd().current_dir(dir.path())
+        .args(["restore", compose.to_str().unwrap(), "--from", bak.to_str().unwrap(), "--yes"])
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read(dir.path().join("data").join("photo.jpg")).unwrap(),
+        b"irreplaceable",
+        "restore must recover the original bind data"
+    );
+
+    // Tampering with the BACKUP (not the live data) is detected by verify.
+    std::fs::write(&backed, b"tampered-and-longer").unwrap();
+    yd().current_dir(dir.path()).args(["verify", "--dest", "bak"]).assert().failure();
 }
 
 // ---- ucGuardrailsBlock (no Docker needed) -------------------------------------

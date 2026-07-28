@@ -368,7 +368,10 @@ fn permissions_json(root: &Path, rel: &str) -> Option<String> {
     }
     // ownership problems on bind paths
     let env: HashMap<String, String> = std::env::vars().collect();
-    if let Ok(mounts) = compose::parse_mounts(&yaml, &env) {
+    // Resolve relative binds against the stack dir — same as mounts_json — so the
+    // permissions/ownership panel probes the real host path, not the server CWD.
+    let stack_dir = p.parent().unwrap_or(root);
+    if let Ok(mounts) = compose::parse_mounts(&yaml, &env).map(|m| resolve_bind_sources(m, stack_dir)) {
         let mut ids = HashMap::new();
         for (svc, (u, g)) in compose::parse_service_ids(&yaml, &env) {
             if let (Some(u), Some(g)) = (u, g) {

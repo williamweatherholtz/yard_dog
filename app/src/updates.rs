@@ -124,14 +124,34 @@ pub fn read_pins(dir: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Pin `service` (append to `dir/.yd-pins`, de-duplicated).
+/// A syntactically valid compose service name — letters/digits/`_`/`.`/`-`, non-empty.
+/// Guards the pins file against a newline (which would split into phantom pins) or
+/// other junk being persisted verbatim.
+pub fn is_valid_service_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+}
+
+/// Pin `service` (append to `dir/.yd-pins`, de-duplicated). Rejects an invalid
+/// service name, and writes atomically (temp+rename) so concurrent pins can't
+/// interleave a torn file.
 pub fn write_pin(dir: &Path, service: &str) -> std::io::Result<()> {
+    if !is_valid_service_name(service) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid service name '{service}'"),
+        ));
+    }
     let mut pins = read_pins(dir);
     if pins.iter().any(|p| p == service) {
         return Ok(());
     }
     pins.push(service.to_string());
-    std::fs::write(dir.join(".yd-pins"), format!("{}\n", pins.join("\n")))
+    let path = dir.join(".yd-pins");
+    let tmp = dir.join(format!(".yd-pins.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, format!("{}\n", pins.join("\n")))?;
+    std::fs::rename(&tmp, &path)
 }
 
 /// Zero out the update action for any pinned service.

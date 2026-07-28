@@ -45,10 +45,12 @@ fn looks_interpolated(v: &str) -> bool {
     }
     if let Some(rest) = v.strip_prefix('$') {
         // A `$` immediately followed by a variable-name start is a reference
-        // (`$VAR`, `$PREFIX-suffix`, `$VAR/path`). `$$secret` (escaped literal) and
-        // `$2b$...` (a `$` not starting a name) are NOT interpolation and stay
-        // eligible for flagging.
-        return matches!(rest.chars().next(), Some(c) if c.is_ascii_alphabetic() || c == '_');
+        // (`$VAR`, `$PREFIX-suffix`, `$VAR/path`). Crucially a reference has NO
+        // second `$` — a modular-crypt hash pasted as a literal secret does
+        // (`$apr1$...`, `$argon2id$...`, `$y$...`, `$6$...`), as do `$$secret`
+        // (escaped literal) and `$2b$...` (digit-led) — all stay flaggable.
+        let starts_name = matches!(rest.chars().next(), Some(c) if c.is_ascii_alphabetic() || c == '_');
+        return starts_name && !rest.contains('$');
     }
     false
 }
@@ -431,6 +433,16 @@ mod tests {
         // A URL without an embedded password must NOT trip it (low false-positive).
         let clean = "services:\n  app:\n    image: app:1.0\n    environment:\n      REDIS_URL: redis://cache:6379/0\n";
         assert!(!rules(&run_guardrails(clean)).contains(&"embedded-credentials"), "portful host is not credentials");
+
+        // Letter-led modular-crypt hashes pasted as a literal secret must STILL be
+        // flagged (a variable reference has no second `$`).
+        for h in ["$apr1$H7abcd", "$argon2id$v=19$m=65536", "$y$j9T$xyz"] {
+            let y = format!("services:\n  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: {h}\n");
+            assert!(rules(&run_guardrails(&y)).contains(&"plaintext-secret"), "MCF hash {h} must flag: {:?}", run_guardrails(&y));
+        }
+        // A partial variable reference is NOT a plaintext secret.
+        let vref = "services:\n  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: $PREFIX-suffix\n";
+        assert!(!rules(&run_guardrails(vref)).contains(&"plaintext-secret"), "a $VAR reference is not plaintext");
     }
 
     #[test]
