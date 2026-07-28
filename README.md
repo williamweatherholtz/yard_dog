@@ -203,14 +203,20 @@ reverse proxy rather than widening the bind.
 
 ## Exit codes
 
-`yd deploy` / `yd upgrade` use exit codes so scripts and CI can react:
+`yd deploy`, `yd upgrade`, `yd check`, `yd doctor`, and `yd restore` share one
+exit-code scheme so scripts and CI can react uniformly:
 
 | Code | Meaning |
 |---|---|
-| `0` | Success (deployed / upgraded / cleanly rolled back / skipped). |
-| `2` | Pre-change backup failed — nothing was applied. |
-| `3` | Blocked by a guardrail (e.g. floating tag or plaintext secret). |
-| `4` | **Critical:** the change failed *and* the rollback redeploy also failed — the live stack needs attention. |
+| `0` | Success (deployed / upgraded / cleanly rolled back / skipped / ready / restored). |
+| `2` | Pre-change backup failed — nothing was applied (`deploy`, `upgrade`). |
+| `3` | Blocked / not-ready: a guardrail block (floating tag, plaintext or URL-embedded secret), an unresolvable service, or `doctor`/`check` judging the stack not deploy-ready. |
+| `4` | **Critical:** the change failed *and* the rollback redeploy also failed — the live stack needs attention (`deploy`, `upgrade`). |
+
+A successful `deploy`/`upgrade` still prints `note: deployed but health NOT
+verified — no healthcheck on: …` when a deployed service has no healthcheck, so
+exit `0` never silently implies health was proven. Add a `healthcheck:` (or pass
+`--wait-timeout` to widen the health-gate for a slow-starting stack).
 
 ---
 

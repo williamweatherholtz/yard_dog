@@ -10,7 +10,9 @@ use std::path::Path;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum UpgradeOutcome {
-    Upgraded,
+    /// Upgraded. `health_unverified` names services with no healthcheck (running
+    /// but not proven healthy).
+    Upgraded { health_unverified: Vec<String> },
     Regressed(String),
     /// Upgrade failed and the rollback redeploy also failed — needs attention.
     RegressFailed(String),
@@ -39,6 +41,9 @@ pub fn try_image_change(yaml: &str, service: &str, image: &str) -> Option<String
     let mut out: Vec<String> = Vec::new();
     let mut services_indent: Option<usize> = None;
     let mut target_indent: Option<usize> = None;
+    // The indent of the target service's direct keys, so a nested `image:` (under
+    // labels/environment) can't be mistaken for the service-level image.
+    let mut key_indent: Option<usize> = None;
     let mut replaced = false;
 
     for line in yaml.lines() {
@@ -60,6 +65,7 @@ pub fn try_image_change(yaml: &str, service: &str, image: &str) -> Option<String
         if structural && indent <= svc_indent {
             services_indent = None;
             target_indent = None;
+            key_indent = None;
             out.push(line.to_string());
             continue;
         }
@@ -75,6 +81,7 @@ pub fn try_image_change(yaml: &str, service: &str, image: &str) -> Option<String
                         == Some(service)
                 {
                     target_indent = Some(indent);
+                    key_indent = None;
                 }
                 out.push(line.to_string());
             }
@@ -83,6 +90,7 @@ pub fn try_image_change(yaml: &str, service: &str, image: &str) -> Option<String
                 if structural && indent <= t_indent {
                     // Left the target service; re-check this same line as a header.
                     target_indent = None;
+                    key_indent = None;
                     if indent > svc_indent && trimmed
                         .strip_suffix(':')
                         .map(|h| h.trim_matches('"').trim_matches('\''))
@@ -90,17 +98,42 @@ pub fn try_image_change(yaml: &str, service: &str, image: &str) -> Option<String
                         target_indent = Some(indent);
                     }
                     out.push(line.to_string());
-                } else if !replaced && trimmed.starts_with("image:") {
-                    let after = &trimmed["image:".len()..];
-                    let comment = after.find('#').map(|i| after[i..].to_string());
-                    let indent_str = &line[..indent];
-                    out.push(match comment {
-                        Some(c) => format!("{indent_str}image: {image}  {c}"),
-                        None => format!("{indent_str}image: {image}"),
-                    });
-                    replaced = true;
                 } else {
-                    out.push(line.to_string());
+                    // First structural line inside the service fixes the direct-key
+                    // indent; only an `image:` at that depth is the service image.
+                    if structural && key_indent.is_none() {
+                        key_indent = Some(indent);
+                    }
+                    if !replaced && trimmed.starts_with("image:") && Some(indent) == key_indent {
+                        let after = &trimmed["image:".len()..];
+                        let hash = after.find('#');
+                        let comment = hash.map(|i| after[i..].to_string());
+                        let value = match hash {
+                            Some(i) => after[..i].trim(),
+                            None => after.trim(),
+                        };
+                        let indent_str = &line[..indent];
+                        if value.starts_with('*') {
+                            // An aliased image (`*anchor`) can't be surgically
+                            // rewritten here — leave it and let the caller report
+                            // that nothing was applied, rather than corrupt the alias.
+                            out.push(line.to_string());
+                        } else {
+                            // Preserve a YAML anchor (`&name`) so any `*name` alias
+                            // elsewhere still resolves to the (now-upgraded) image.
+                            let prefix = value
+                                .strip_prefix('&')
+                                .map(|r| format!("&{} ", r.split_whitespace().next().unwrap_or("")))
+                                .unwrap_or_default();
+                            out.push(match comment {
+                                Some(c) => format!("{indent_str}image: {prefix}{image}  {c}"),
+                                None => format!("{indent_str}image: {prefix}{image}"),
+                            });
+                            replaced = true;
+                        }
+                    } else {
+                        out.push(line.to_string());
+                    }
                 }
             }
         }
@@ -147,7 +180,9 @@ pub fn safe_upgrade(
     };
     let mut trace = Vec::new();
     Ok(match flow::run(&change, backup, deployer, &mut trace)? {
-        Outcome::Upgraded | Outcome::Deployed => UpgradeOutcome::Upgraded,
+        Outcome::Upgraded { health_unverified } | Outcome::Deployed { health_unverified } => {
+            UpgradeOutcome::Upgraded { health_unverified }
+        }
         Outcome::Regressed(r) => UpgradeOutcome::Regressed(r),
         Outcome::RegressFailed(r) => UpgradeOutcome::RegressFailed(r),
         Outcome::NoSuchService(r) => UpgradeOutcome::NoSuchService(r),
@@ -240,10 +275,29 @@ mod tests {
     }
 
     #[test]
+    fn image_change_preserves_yaml_anchor() {
+        // An anchored image keeps its `&anchor` so a `*anchor` alias elsewhere
+        // still resolves to the upgraded image.
+        let yaml = "services:\n  app:\n    image: &img nginx:1.27\n  side:\n    image: *img\n";
+        let changed = try_image_change(yaml, "app", "nginx:1.29").expect("app has an image");
+        assert!(changed.contains("image: &img nginx:1.29"), "anchor preserved: {changed}");
+        assert!(changed.contains("image: *img"), "alias untouched");
+    }
+
+    #[test]
+    fn image_change_ignores_nested_image_key() {
+        // A nested `image:` under labels must not be mistaken for the service image.
+        let yaml = "services:\n  app:\n    labels:\n      image: not-the-image\n    image: nginx:1.27\n";
+        let changed = try_image_change(yaml, "app", "nginx:1.29").expect("app has an image");
+        assert!(changed.contains("image: nginx:1.29"), "service image changed: {changed}");
+        assert!(changed.contains("image: not-the-image"), "nested label left alone");
+    }
+
+    #[test]
     fn upgrade_accepts_when_healthy_and_accepted() {
         let (dir, compose) = repo_with_app();
         let out = safe_upgrade(&compose, dir.path(), "app", "nginx:1.29", true, true, &NoopBackup, &OkDeployer).unwrap();
-        assert_eq!(out, UpgradeOutcome::Upgraded);
+        assert!(matches!(out, UpgradeOutcome::Upgraded { .. }), "got {out:?}");
         assert_eq!(app_image(&compose), "nginx:1.29", "upgrade kept");
     }
 

@@ -54,7 +54,15 @@ impl HostFs for RealFs {
             Ok(m) => {
                 let ft = m.file_type();
                 if ft.is_symlink() {
-                    PathKind::Symlink
+                    // Resolve the link to what Docker will actually bind. A dangling
+                    // link (target removed) is effectively a missing path, so it must
+                    // surface as Missing rather than a healthy "exists".
+                    match std::fs::metadata(path) {
+                        Err(_) => PathKind::Missing,
+                        Ok(t) if t.is_dir() => PathKind::Directory,
+                        Ok(t) if t.is_file() => PathKind::File,
+                        Ok(_) => PathKind::Other,
+                    }
                 } else if ft.is_dir() {
                     PathKind::Directory
                 } else if ft.is_file() {
@@ -67,7 +75,9 @@ impl HostFs for RealFs {
     }
 
     fn metadata(&self, path: &str) -> Option<PathMeta> {
-        let m = std::fs::symlink_metadata(path).ok()?;
+        // Follow symlinks so ownership reflects the target Docker actually binds,
+        // not the link node (whose uid/gid is usually the creating user/root).
+        let m = std::fs::metadata(path).ok()?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;

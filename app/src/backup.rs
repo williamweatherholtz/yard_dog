@@ -26,7 +26,10 @@ impl DbEngine {
             DbEngine::Mysql => "mysqldump --all-databases --single-transaction",
             DbEngine::Mariadb => "mariadb-dump --all-databases --single-transaction",
             DbEngine::Mongo => "mongodump --archive",
-            DbEngine::Redis => "redis-cli --rdb /data/dump.rdb",
+            // `--rdb -` streams the RDB to stdout (which the runner captures);
+            // `--rdb /data/dump.rdb` would write inside the container and leave
+            // stdout — the captured file — empty while still exiting 0.
+            DbEngine::Redis => "redis-cli --rdb -",
         }
     }
 }
@@ -254,7 +257,17 @@ pub fn backup_stack(
     archiver: &dyn Archiver,
 ) -> std::io::Result<BackupManifest> {
     let plan = build_backup_plan(yaml, env, volumes, net);
-    execute_plan(&plan, dest_dir, confirmed, runner, archiver)
+    let manifest = execute_plan(&plan, dest_dir, confirmed, runner, archiver)?;
+    // Record an integrity manifest so a pre-change backup is verifiable AND
+    // recognized as a restorable recovery point (restore requires manifest.json).
+    // Only when the dest was actually populated (callers create it first).
+    if confirmed && Path::new(dest_dir).exists() {
+        let integrity = crate::verify::build_manifest(Path::new(dest_dir))?;
+        let json = serde_json::to_string_pretty(&integrity)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        std::fs::write(Path::new(dest_dir).join("manifest.json"), json)?;
+    }
+    Ok(manifest)
 }
 
 // ---- data restore (the reverse of a bind-data backup) -----------------------
@@ -275,27 +288,70 @@ impl NetworkProbe for NoNet {
 }
 
 fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
-    if src.is_file() {
+    // Use symlink_metadata so a symlink is classified as a link, not followed —
+    // a symlink-to-directory has is_dir()==false and would otherwise be handed to
+    // fs::copy (which errors on a directory) and abort the whole restore.
+    let meta = std::fs::symlink_metadata(src)?;
+    let ft = meta.file_type();
+    if ft.is_symlink() {
+        copy_symlink(src, dst)?;
+        return Ok(());
+    }
+    if ft.is_file() {
         if let Some(p) = dst.parent() {
             std::fs::create_dir_all(p)?;
         }
         std::fs::copy(src, dst)?;
         return Ok(());
     }
+    if !ft.is_dir() {
+        // A socket / fifo / device node (e.g. a live DB socket in a bind dir) is
+        // not backup data — skip it rather than blocking on fs::copy.
+        return Ok(());
+    }
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let to = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
+        let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            copy_symlink(&entry.path(), &to)?;
+        } else if ft.is_dir() {
             copy_tree(&entry.path(), &to)?;
-        } else {
+        } else if ft.is_file() {
             if let Some(p) = to.parent() {
                 std::fs::create_dir_all(p)?;
             }
             std::fs::copy(entry.path(), &to)?;
         }
+        // else: special file — skip
     }
     Ok(())
+}
+
+/// Recreate a symlink at `dst` pointing at the same target as `src`, rather than
+/// dereferencing it (which would replace a link with a copy of its target).
+fn copy_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if let Some(p) = dst.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    let target = std::fs::read_link(src)?;
+    let _ = std::fs::remove_file(dst);
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&target, dst)
+    }
+    #[cfg(windows)]
+    {
+        // On Windows a link's kind must be chosen; fall back to a file symlink,
+        // and if that's not permitted, skip rather than abort the whole restore.
+        std::os::windows::fs::symlink_file(&target, dst).or(Ok(()))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = target;
+        Ok(())
+    }
 }
 
 /// Resolve a bind source against the stack dir (as compose does) for relative paths.

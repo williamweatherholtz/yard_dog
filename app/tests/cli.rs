@@ -167,9 +167,15 @@ fn backup_run_copies_bind_data() {
 #[test]
 fn prune_keeps_newest_snapshots() {
     let dir = tempfile::tempdir().unwrap();
+    // A snapshot is only a snapshot if it carries its own manifest.json — this is
+    // what stops prune from ever deleting flat bind-DATA subdirs. Also drop a
+    // manifest-less data dir alongside to prove it is NEVER pruned.
     for name in ["2026-01", "2026-02", "2026-03"] {
-        std::fs::create_dir(dir.path().join(name)).unwrap();
+        let s = dir.path().join(name);
+        std::fs::create_dir(&s).unwrap();
+        std::fs::write(s.join("manifest.json"), "{}").unwrap();
     }
+    std::fs::create_dir(dir.path().join("html-data")).unwrap();
 
     Command::cargo_bin("yd")
         .unwrap()
@@ -181,9 +187,10 @@ fn prune_keeps_newest_snapshots() {
         .assert()
         .success();
 
-    assert!(!dir.path().join("2026-01").exists(), "oldest must be pruned");
+    assert!(!dir.path().join("2026-01").exists(), "oldest snapshot must be pruned");
     assert!(dir.path().join("2026-02").exists());
     assert!(dir.path().join("2026-03").exists());
+    assert!(dir.path().join("html-data").exists(), "a manifest-less data dir must never be pruned");
 }
 
 #[test]

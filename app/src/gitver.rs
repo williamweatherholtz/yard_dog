@@ -40,29 +40,49 @@ const GITATTRIBUTES: &str = "* text=auto eol=lf\n";
 /// in-process git ops AND spawned `yd` subprocesses (deploy/backup) all take it,
 /// so concurrent mutations of the shared monorepo index serialize — held only for
 /// the git step, not a whole deploy, so different stacks aren't blocked.
-struct IndexLock(std::path::PathBuf);
+struct IndexLock {
+    path: std::path::PathBuf,
+    owned: bool,
+}
 impl Drop for IndexLock {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        // Only ever remove a lock this instance actually created — never one we
+        // proceeded-unlocked past, and never another holder's file.
+        if self.owned {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 fn acquire_index_lock(root: &Path) -> IndexLock {
     let path = root.join(".yd-git.lock");
-    let start = std::time::Instant::now();
+    let stale = std::time::Duration::from_secs(30);
     loop {
         match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(_) => return IndexLock(path),
+            Ok(mut f) => {
+                use std::io::Write;
+                let _ = writeln!(f, "{}", std::process::id());
+                return IndexLock { path, owned: true };
+            }
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-                // Held by another process — wait; break a stale lock after 30s.
-                if start.elapsed() > std::time::Duration::from_secs(30) {
+                // Break the lock only if the *file itself* is older than the stale
+                // window — never merely because we've waited that long. Measuring
+                // the file's age (not our wait time) means a lock another waiter
+                // just freshly took has a recent mtime and won't be deleted, so two
+                // waiters can't both break in and double-hold the index.
+                let stale_now = std::fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .map(|t| t.elapsed().map(|e| e > stale).unwrap_or(false))
+                    .unwrap_or(false);
+                if stale_now {
                     let _ = std::fs::remove_file(&path);
                     continue;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(40));
             }
-            // If we can't even create it (e.g. read-only fs), proceed unlocked
-            // rather than hang — correctness degrades to the pre-lock behavior.
-            Err(_) => return IndexLock(path),
+            // Can't even create it (e.g. read-only fs, or a Windows sharing/
+            // pending-delete violation) — proceed unlocked rather than hang, and
+            // mark it unowned so Drop never deletes a file we didn't create.
+            Err(_) => return IndexLock { path, owned: false },
         }
     }
 }
@@ -342,8 +362,13 @@ pub fn pull(root: &Path) -> io::Result<String> {
 pub fn ahead_behind(root: &Path) -> Option<(usize, usize)> {
     // Best-effort refresh — a failed fetch (offline/auth) shouldn't collapse to
     // "in sync"; fall back to the last-known tracking ref so counts are stale, not
-    // silently zero. `None` is then reserved for "no upstream configured".
-    let _ = git_ok(root, &["fetch", "origin"]);
+    // silently zero. `None` is then reserved for "no upstream configured". The
+    // fetch writes remote-tracking refs/FETCH_HEAD, so serialize it under the
+    // cross-process index lock — otherwise two concurrent /api/git reads race.
+    {
+        let _lock = acquire_index_lock(root);
+        let _ = git_ok(root, &["fetch", "origin"]);
+    }
     let branch = current_branch(root).ok()?;
     let out = git_ok(root, &["rev-list", "--left-right", "--count", &format!("origin/{branch}...HEAD")]).ok()?;
     let mut it = out.split_whitespace();

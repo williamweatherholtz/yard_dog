@@ -46,6 +46,27 @@ fn is_host_path(t: MountType) -> bool {
     matches!(t, MountType::HostBind | MountType::Network)
 }
 
+/// Whether the container target implies a directory or a file, when the shape of
+/// the target gives a *strong* signal — a trailing slash means a directory; a
+/// recognized config/file extension means a file. Extensionless targets return
+/// `None` (unknown) so an intentional extensionless file bind isn't false-flagged.
+fn expected_kind(target: &str) -> Option<bool> {
+    const FILE_EXTS: &[&str] = &[
+        "conf", "cfg", "cnf", "yaml", "yml", "json", "toml", "ini", "env", "pem", "crt", "key",
+        "properties", "xml", "sh", "sql", "pub",
+    ];
+    if target.ends_with('/') {
+        return Some(true);
+    }
+    let base = target.rsplit(['/', '\\']).next().unwrap_or(target);
+    if let Some((_, ext)) = base.rsplit_once('.') {
+        if FILE_EXTS.contains(&ext.to_ascii_lowercase().as_str()) {
+            return Some(false);
+        }
+    }
+    None
+}
+
 /// Build the analysis for every mount.
 ///
 /// `expected` is the container's `(PUID, PGID)` when the stack declares them.
@@ -69,12 +90,30 @@ pub fn build_report(
                     let ex = check_existence(src, fs);
                     if !ex.exists {
                         issues.push(Issue::MissingPath { path: src.clone() });
-                    } else if let Some(meta) = fs.metadata(src) {
-                        for oi in detect_ownership(&meta, expected) {
-                            issues.push(Issue::Ownership {
-                                issue: oi,
+                    } else {
+                        // Wrong-kind bind: a file where a directory is wanted (or
+                        // vice-versa) — Docker would bind it anyway and the container
+                        // then breaks. Only flag on a strong target-shape signal.
+                        match (expected_kind(&m.target), ex.kind) {
+                            (Some(true), PathKind::File) => issues.push(Issue::TypeMismatch {
                                 path: src.clone(),
-                            });
+                                found: PathKind::File,
+                                expected_dir: true,
+                            }),
+                            (Some(false), PathKind::Directory) => issues.push(Issue::TypeMismatch {
+                                path: src.clone(),
+                                found: PathKind::Directory,
+                                expected_dir: false,
+                            }),
+                            _ => {}
+                        }
+                        if let Some(meta) = fs.metadata(src) {
+                            for oi in detect_ownership(&meta, expected) {
+                                issues.push(Issue::Ownership {
+                                    issue: oi,
+                                    path: src.clone(),
+                                });
+                            }
                         }
                     }
                     existence = Some(ex);
@@ -185,6 +224,55 @@ mod tests {
         fn metadata(&self, _p: &str) -> Option<crate::hostfs::PathMeta> {
             self.meta
         }
+    }
+
+    #[test]
+    fn wrong_kind_bind_flagged_as_type_mismatch() {
+        // A file bound where a directory is expected (trailing-slash target).
+        let mounts = vec![RawMount {
+            service: "app".into(),
+            source: Some("/srv/thing".into()),
+            target: "/data/".into(),
+            read_only: false,
+            long_form: false,
+        }];
+        let fs = MapFs(HashMap::from([("/srv/thing".to_string(), PathKind::File)]));
+        let reports = build_report(&mounts, &NoVols, &LocalFsOnly, &fs, &HashMap::new());
+        assert!(
+            reports[0].issues.iter().any(|i| matches!(
+                i,
+                Issue::TypeMismatch { expected_dir: true, found: PathKind::File, .. }
+            )),
+            "file-where-dir-expected must be a TypeMismatch: {:?}",
+            reports[0].issues
+        );
+
+        // A directory bound where a config file is expected (recognized extension).
+        let mounts = vec![RawMount {
+            service: "web".into(),
+            source: Some("/srv/nginx.conf".into()),
+            target: "/etc/nginx/nginx.conf".into(),
+            read_only: true,
+            long_form: false,
+        }];
+        let fs = MapFs(HashMap::from([("/srv/nginx.conf".to_string(), PathKind::Directory)]));
+        let reports = build_report(&mounts, &NoVols, &LocalFsOnly, &fs, &HashMap::new());
+        assert!(reports[0].issues.iter().any(|i| matches!(
+            i,
+            Issue::TypeMismatch { expected_dir: false, found: PathKind::Directory, .. }
+        )));
+
+        // Extensionless target with a matching-kind directory: no false positive.
+        let mounts = vec![RawMount {
+            service: "app".into(),
+            source: Some("/srv/data".into()),
+            target: "/data".into(),
+            read_only: false,
+            long_form: false,
+        }];
+        let fs = MapFs(HashMap::from([("/srv/data".to_string(), PathKind::Directory)]));
+        let reports = build_report(&mounts, &NoVols, &LocalFsOnly, &fs, &HashMap::new());
+        assert!(!reports[0].issues.iter().any(|i| matches!(i, Issue::TypeMismatch { .. })));
     }
 
     #[test]

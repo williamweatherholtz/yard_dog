@@ -19,9 +19,11 @@ pub fn assess(yaml: &str, lifecycle: LifecycleState) -> Preflight {
     let findings = run_guardrails(yaml);
     let blocks = findings.iter().filter(|f| f.severity == Severity::Block).count();
     let warns = findings.iter().filter(|f| f.severity == Severity::Warn).count();
-    // Same rules the deploy flow enforces: any block, or an archived stack, is
-    // not deploy-ready.
-    let ready = blocks == 0 && lifecycle != LifecycleState::Archived;
+    // Same rules the deploy flow enforces: any block, an archived stack, OR a
+    // compose with no services (which the FSM Blocks) is not deploy-ready — so
+    // doctor can't say READY on a file `deploy` would refuse.
+    let has_services = !crate::workload::parse_services(yaml).is_empty();
+    let ready = blocks == 0 && lifecycle != LifecycleState::Archived && has_services;
     Preflight { blocks, warns, lifecycle, ready }
 }
 
@@ -60,6 +62,14 @@ mod tests {
         let p = assess(CLEAN, LifecycleState::Archived);
         assert_eq!(p.blocks, 0);
         assert!(!p.ready, "an archived stack is never deploy-ready");
+    }
+
+    #[test]
+    fn compose_with_no_services_is_not_ready() {
+        // deploy Blocks "no services declared"; doctor must agree, not say READY.
+        let p = assess("networks:\n  default: {}\n", LifecycleState::Active);
+        assert_eq!(p.blocks, 0, "no guardrail blocks fire on a serviceless compose");
+        assert!(!p.ready, "a compose with no services is not deploy-ready");
     }
 
     #[test]

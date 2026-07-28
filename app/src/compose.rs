@@ -162,13 +162,30 @@ fn interpolate(input: &str, env: &HashMap<String, String>) -> String {
             continue;
         }
         match chars.peek() {
+            // `$$` is a compose-escaped literal `$` (Docker collapses it to one
+            // `$` and does NOT interpolate what follows).
+            Some('$') => {
+                chars.next();
+                out.push('$');
+            }
             Some('{') => {
                 chars.next();
+                // Capture up to the *matching* `}`, tracking nesting so a braced
+                // default like `${A:-${B}}` is captured whole (resolve_braced then
+                // re-interpolates the default) rather than truncated at the first `}`.
                 let mut inner = String::new();
+                let mut depth = 1usize;
                 while let Some(&nc) = chars.peek() {
                     chars.next();
-                    if nc == '}' {
-                        break;
+                    match nc {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
                     }
                     inner.push(nc);
                 }
@@ -333,6 +350,22 @@ fn resolve_braced(inner: &str, env: &HashMap<String, String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compose_dollar_escape_is_literal() {
+        let env = HashMap::new();
+        // `$$` is a compose-escaped literal `$`; `$${VAR}` must NOT interpolate.
+        assert_eq!(interpolate("pass$$word", &env), "pass$word");
+        assert_eq!(interpolate("$${VAR}", &env), "${VAR}");
+    }
+
+    #[test]
+    fn compose_nested_braced_default_resolves() {
+        let mut env = HashMap::new();
+        env.insert("B".to_string(), "beta".to_string());
+        // A unset ⇒ default `${B}` resolves to "beta"; no stray `}` is emitted.
+        assert_eq!(interpolate("${A:-${B}}", &env), "beta");
+    }
 
     #[test]
     fn parses_short_and_long_mounts_with_interpolation() {

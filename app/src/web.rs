@@ -31,6 +31,12 @@ fn stack_lock(key: &str) -> Arc<Mutex<()>> {
     static M: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
     let map = M.get_or_init(|| Mutex::new(HashMap::new()));
     let mut g = map.lock().unwrap_or_else(|e| e.into_inner());
+    // Bound growth (a loopback client could POST many distinct compose strings):
+    // when the table gets large, drop entries no request currently holds — an
+    // Arc strong_count of 1 means only the map still references that mutex.
+    if g.len() > 1024 {
+        g.retain(|_, v| Arc::strong_count(v) > 1);
+    }
     g.entry(key.to_string()).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
 }
 
@@ -39,12 +45,31 @@ fn stack_lock(key: &str) -> Arc<Mutex<()>> {
 fn stack_key(body: &str) -> String {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
-        .and_then(|v| {
-            v.get("compose").and_then(|c| c.as_str()).map(|s| {
-                Path::new(s).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
-            })
-        })
+        .and_then(|v| v.get("compose").and_then(|c| c.as_str()).map(normalize_stack_key))
         .unwrap_or_else(|| "_".to_string())
+}
+
+/// Lexically normalize a compose path to its stack key (parent dir) so different
+/// spellings of one stack — `a/c.yml`, `./a/c.yml`, `a//c.yml`, `a\c.yml` — map to
+/// the SAME lock and therefore serialize. Purely lexical (no fs), mirroring
+/// safe_join's component model.
+fn normalize_stack_key(compose: &str) -> String {
+    use std::path::Component;
+    let unified = compose.replace('\\', "/");
+    let parent = Path::new(&unified).parent().unwrap_or_else(|| Path::new(""));
+    let mut parts: Vec<String> = Vec::new();
+    for c in parent.components() {
+        match c {
+            Component::Normal(s) => parts.push(s.to_string_lossy().to_string()),
+            Component::ParentDir => parts.push("..".into()),
+            _ => {}
+        }
+    }
+    if parts.is_empty() {
+        "_".to_string()
+    } else {
+        parts.join("/")
+    }
 }
 use std::io;
 use std::path::{Path, PathBuf};
@@ -558,14 +583,30 @@ fn yd_bin() -> PathBuf {
 }
 
 /// Run `yd` (or docker) with a fixed arg vector; return a JSON result object.
+/// Truncate a tool's output to a bounded, UTF-8-safe prefix so a chatty command
+/// can't make the server buffer/serialize an unbounded string.
+fn cap_output(bytes: &[u8]) -> String {
+    const MAX: usize = 1 << 20; // 1 MiB
+    if bytes.len() <= MAX {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+    let mut end = MAX;
+    while end > 0 && (bytes[end] & 0xC0) == 0x80 {
+        end -= 1; // don't split a multi-byte char
+    }
+    let mut s = String::from_utf8_lossy(&bytes[..end]).into_owned();
+    s.push_str("\n…[output truncated]");
+    s
+}
+
 fn run_tool(program: &Path, args: &[String]) -> String {
     match std::process::Command::new(program).args(args).output() {
         Ok(out) => format!(
             "{{\"ok\":{},\"exit\":{},\"stdout\":{},\"stderr\":{}}}",
             out.status.success(),
             out.status.code().unwrap_or(-1),
-            json_escape(&String::from_utf8_lossy(&out.stdout)),
-            json_escape(&String::from_utf8_lossy(&out.stderr))
+            json_escape(&cap_output(&out.stdout)),
+            json_escape(&cap_output(&out.stderr))
         ),
         Err(e) => format!("{{\"ok\":false,\"exit\":-1,\"stdout\":\"\",\"stderr\":{}}}", json_escape(&e.to_string())),
     }
@@ -670,6 +711,11 @@ fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
             };
             if safe_join(root, rel).is_none() {
                 return bad("path outside root");
+            }
+            // Validate the revision like /api/diff does — an unchecked value could
+            // reach a git option slot (e.g. a leading-dash "sha").
+            if !is_git_sha(sha) {
+                return bad("invalid revision");
             }
             let sr = stack_rel(rel);
             let result = (|| -> std::io::Result<String> {
@@ -940,7 +986,13 @@ pub fn serve(host: &str, port: u16, root: &Path) -> io::Result<()> {
             (Method::Get, "/api/logs") => {
                 match query_param(&query, "compose").and_then(|r| safe_join(&root, &r)) {
                     Some(abs) => {
-                        let tail = query_param(&query, "tail").unwrap_or_else(|| "200".into());
+                        // Clamp `tail` to a sane integer so a huge/garbage value can't
+                        // make the server buffer an unbounded log in memory.
+                        let tail = query_param(&query, "tail")
+                            .and_then(|t| t.parse::<u32>().ok())
+                            .unwrap_or(200)
+                            .clamp(1, 5000)
+                            .to_string();
                         json_response(200, run_tool(Path::new("docker"), &["compose".into(), "-f".into(), abs.to_string_lossy().to_string(), "logs".into(), "--no-color".into(), "--tail".into(), tail]))
                     }
                     None => json_response(400, "{\"error\":\"compose required or outside root\"}".into()),

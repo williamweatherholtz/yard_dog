@@ -90,13 +90,32 @@ pub fn parse_compose_ps(output: &str) -> HashMap<String, String> {
 /// prefix and make an implicit `:latest` explicit, so declared vs running don't
 /// falsely differ on registry qualification or an omitted tag.
 pub fn normalize_image(img: &str) -> String {
-    let s = if let Some(r) = img.strip_prefix("docker.io/") {
-        r.strip_prefix("library/").unwrap_or(r)
-    } else {
-        img
-    };
-    if s.contains('@') {
-        return s.to_string(); // digest-pinned — compare verbatim
+    // Strip any of Docker Hub's equivalent host prefixes, plus the implicit
+    // `library/` namespace for official images.
+    let mut s = img;
+    for host in ["index.docker.io/", "registry-1.docker.io/", "docker.io/"] {
+        if let Some(r) = s.strip_prefix(host) {
+            s = r;
+            break;
+        }
+    }
+    s = s.strip_prefix("library/").unwrap_or(s);
+    // A digest pins the exact image. If a tag is also present (`repo:tag@sha256:…`),
+    // the digest is authoritative — drop the tag so `repo:1.2@sha` and `repo@sha`
+    // (same digest) don't read as drift.
+    if let Some((before, digest)) = s.split_once('@') {
+        // Drop a tag only if it's on the final path component (`name:tag`), so a
+        // registry `host:port` colon is preserved.
+        let (path, name) = match before.rsplit_once('/') {
+            Some((p, n)) => (Some(p), n),
+            None => (None, before),
+        };
+        let name = name.split_once(':').map(|(n, _)| n).unwrap_or(name);
+        let repo = match path {
+            Some(p) => format!("{p}/{name}"),
+            None => name.to_string(),
+        };
+        return format!("{repo}@{digest}");
     }
     let last = s.rsplit('/').next().unwrap_or(s);
     if last.contains(':') {
@@ -172,6 +191,19 @@ pub fn drift_report(yaml: &str, state: &dyn RunningState) -> Option<Vec<DriftIte
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_image_equates_hub_prefixes_and_tag_plus_digest() {
+        // fully-qualified Hub hostnames normalize to the short form
+        assert_eq!(normalize_image("index.docker.io/library/nginx:1.27"), normalize_image("nginx:1.27"));
+        assert_eq!(normalize_image("registry-1.docker.io/library/redis:7"), normalize_image("redis:7"));
+        // a tag alongside a digest reduces to the digest (authoritative)
+        assert_eq!(normalize_image("repo:1.2@sha256:abc"), normalize_image("repo@sha256:abc"));
+        // a private-registry host:port colon is preserved, not mistaken for a tag
+        assert_eq!(normalize_image("myreg:5000/app:1.2@sha256:abc"), "myreg:5000/app@sha256:abc");
+        // genuinely different images still differ
+        assert_ne!(normalize_image("nginx:1.27"), normalize_image("nginx:1.28"));
+    }
 
     fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()

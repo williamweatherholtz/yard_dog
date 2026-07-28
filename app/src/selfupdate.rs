@@ -231,6 +231,8 @@ pub enum ApplyOutcome {
     UpToDate,
     Updated { from: String, to: String, backup: PathBuf },
     NoAsset(String),
+    /// The asset was downloaded but has no entry in the published SHA256SUMS.
+    ChecksumMissing(String),
     ChecksumMismatch,
     /// A signing key is configured but the release's signature is missing/invalid.
     SignatureInvalid,
@@ -244,6 +246,14 @@ pub enum ApplyOutcome {
 /// `YD_SIGNING_KEY` secret so release.yml can produce `SHA256SUMS.sig`), the update
 /// path REQUIRES a valid signature — defeating a GitHub-release-write compromise.
 pub const RELEASE_PUBKEY_HEX: &str = "";
+
+/// The configured release public key, or `None` when unprovisioned. Trimming
+/// first means a whitespace-only value reads as unconfigured (checksum-only)
+/// rather than silently blocking every update.
+fn configured_pubkey() -> Option<&'static str> {
+    let k = RELEASE_PUBKEY_HEX.trim();
+    (!k.is_empty()).then_some(k)
+}
 
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
     let s = s.trim();
@@ -305,7 +315,9 @@ pub fn perform_update(
         return Ok(ApplyOutcome::Unreachable);
     };
     let Some(expected) = parse_sha256sums(&sums).get(asset).cloned() else {
-        return Ok(ApplyOutcome::ChecksumMismatch);
+        // The asset isn't listed in SHA256SUMS at all — distinct from a hash that
+        // was present but didn't match.
+        return Ok(ApplyOutcome::ChecksumMissing(asset.to_string()));
     };
     if !verify_sha256(&bin, &expected) {
         return Ok(ApplyOutcome::ChecksumMismatch);
@@ -313,14 +325,14 @@ pub fn perform_update(
     // Authenticity: when a signing key is configured, the SHA256SUMS must carry a
     // valid ed25519 signature (SHA256SUMS.sig) — so a release-write compromise
     // that swaps both the binary and its checksums is still rejected.
-    if !RELEASE_PUBKEY_HEX.is_empty() {
+    if let Some(pubkey) = configured_pubkey() {
         let Some(sig_url) = release.asset_url("SHA256SUMS.sig") else {
             return Ok(ApplyOutcome::SignatureInvalid);
         };
         let Some(sig) = gh.download(sig_url).and_then(|b| String::from_utf8(b).ok()) else {
             return Ok(ApplyOutcome::SignatureInvalid);
         };
-        if !verify_ed25519(RELEASE_PUBKEY_HEX, sums.as_bytes(), sig.trim()) {
+        if !verify_ed25519(pubkey, sums.as_bytes(), sig.trim()) {
             return Ok(ApplyOutcome::SignatureInvalid);
         }
     }

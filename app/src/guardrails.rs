@@ -32,7 +32,50 @@ fn key_is_secret(key: &str) -> bool {
 
 fn is_plaintext(value: &str) -> bool {
     let v = value.trim();
-    !v.is_empty() && !v.contains("${") && !v.starts_with('$')
+    !v.is_empty() && !looks_interpolated(v)
+}
+
+/// True when the value is a compose *variable reference* (so its literal text is
+/// not the secret). `${...}` anywhere, or a whole-value `$NAME` token, counts as
+/// interpolation. `$$secret` (an escaped literal `$`) and `$2b$...` (a `$` that
+/// does not begin a variable name) are literals — those must still be flagged.
+fn looks_interpolated(v: &str) -> bool {
+    if v.contains("${") {
+        return true;
+    }
+    if let Some(rest) = v.strip_prefix('$') {
+        return matches!(rest.chars().next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+            && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    }
+    false
+}
+
+/// True when a value bakes credentials into a connection URL —
+/// `scheme://user:pass@host` — regardless of the env key's name. Fires on
+/// `postgres://u:p@h/db` but not on `redis://cache:6379` (port, not password)
+/// nor `https://user@host` (no password), keeping false positives near zero.
+fn has_embedded_credentials(value: &str) -> bool {
+    let v = value.trim();
+    let Some(idx) = v.find("://") else {
+        return false;
+    };
+    let scheme = &v[..idx];
+    if scheme.is_empty()
+        || !scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
+    {
+        return false;
+    }
+    let after = &v[idx + 3..];
+    let authority = after.split(['/', '?', '#']).next().unwrap_or(after);
+    match authority.split_once('@') {
+        Some((userinfo, host)) => {
+            !host.is_empty()
+                && userinfo
+                    .split_once(':')
+                    .map_or(false, |(u, p)| !u.is_empty() && !p.is_empty())
+        }
+        None => false,
+    }
 }
 
 /// True when an image reference has no explicit, non-`latest` tag.
@@ -127,6 +170,13 @@ pub fn run_guardrails(yaml: &str) -> Vec<Finding> {
                     rule: "plaintext-secret".into(),
                     severity: Severity::Block,
                     message: format!("environment '{k}' looks like a plaintext secret"),
+                });
+            } else if has_embedded_credentials(&v) {
+                out.push(Finding {
+                    service: service.clone(),
+                    rule: "embedded-credentials".into(),
+                    severity: Severity::Block,
+                    message: format!("environment '{k}' embeds credentials in a URL"),
                 });
             }
         }
@@ -279,6 +329,21 @@ fn is_dangerous_device(src: &str) -> bool {
     // whole-disk block devices: /dev/sda, /dev/nvme0n1, /dev/vda, /dev/hda,
     // /dev/mmcblk0, /dev/dm-0, /dev/loop0 (partitions like sda1 too).
     let leaf = s.strip_prefix("/dev/").unwrap_or("");
+    // udev/device-mapper symlinks that resolve to whole disks or volumes — the
+    // same blast radius as the raw node, reached by a stable name rather than
+    // sdX/nvmeX (which a leaf-prefix match would otherwise miss).
+    const DISK_ALIASES: &[&str] = &[
+        "disk/by-id/",
+        "disk/by-path/",
+        "disk/by-uuid/",
+        "disk/by-partuuid/",
+        "disk/by-label/",
+        "mapper/",
+        "block/",
+    ];
+    if DISK_ALIASES.iter().any(|p| leaf.starts_with(p)) {
+        return true;
+    }
     let disk_prefixes = ["sd", "vd", "hd", "nvme", "mmcblk", "dm-", "loop", "xvd"];
     disk_prefixes
         .iter()
@@ -342,6 +407,37 @@ mod tests {
 
         let inline = "services:\n  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: hunter2\n";
         assert!(rules(&run_guardrails(inline)).contains(&"plaintext-secret"), "inline secret still flagged");
+    }
+
+    #[test]
+    fn secret_detection_no_longer_evaded_by_dollar_or_url() {
+        // `$$`-escaped literal (Docker yields a leading `$`) is a real plaintext
+        // secret, not interpolation — it must be flagged.
+        let esc = "services:\n  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: $$ecretPw99\n";
+        assert!(rules(&run_guardrails(esc)).contains(&"plaintext-secret"), "escaped-$ literal flagged: {:?}", run_guardrails(esc));
+
+        // A genuine `$VAR` reference is interpolation — must NOT be flagged.
+        let var = "services:\n  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: $DB_PW\n";
+        assert!(!rules(&run_guardrails(var)).contains(&"plaintext-secret"), "a $VAR reference is not plaintext");
+
+        // Credentials embedded in a connection URL evade the key-name list — a
+        // key-independent value-shape rule must catch them.
+        let url = "services:\n  app:\n    image: app:1.0\n    environment:\n      DATABASE_URL: postgres://user:pw@db/app\n";
+        assert!(rules(&run_guardrails(url)).contains(&"embedded-credentials"), "URL creds flagged: {:?}", run_guardrails(url));
+
+        // A URL without an embedded password must NOT trip it (low false-positive).
+        let clean = "services:\n  app:\n    image: app:1.0\n    environment:\n      REDIS_URL: redis://cache:6379/0\n";
+        assert!(!rules(&run_guardrails(clean)).contains(&"embedded-credentials"), "portful host is not credentials");
+    }
+
+    #[test]
+    fn whole_disk_udev_symlinks_are_dangerous_devices() {
+        assert!(is_dangerous_device("/dev/disk/by-id/ata-Samsung_SSD"), "by-id whole disk");
+        assert!(is_dangerous_device("/dev/mapper/vg0-data"), "device-mapper volume");
+        assert!(is_dangerous_device("/dev/disk/by-uuid/1234-5678"), "by-uuid");
+        // A plain GPU/serial passthrough is still only a warning, not dangerous.
+        assert!(!is_dangerous_device("/dev/dri/renderD128"), "GPU is not dangerous");
+        assert!(!is_dangerous_device("/dev/ttyUSB0"), "serial is not dangerous");
     }
 
     #[test]

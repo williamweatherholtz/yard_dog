@@ -43,7 +43,13 @@ impl SnapshotStore for LocalStore {
         let mut names = Vec::new();
         for entry in std::fs::read_dir(&self.dir)? {
             let entry = entry?;
-            if entry.file_type()?.is_dir() {
+            // A subdir is a snapshot ONLY if it carries its own `manifest.json`.
+            // Backup bind-DATA subdirs (e.g. `html-1a2b3c4d`) do not, so this is
+            // what stops `prune` from lexically sorting and deleting live backup
+            // data — the critical data-loss bug. A snapshot layer that writes a
+            // manifest per recovery point is pruned correctly; a flat data-only
+            // dest yields zero snapshots (prune is a safe no-op, not destructive).
+            if entry.file_type()?.is_dir() && self.dir.join(entry.file_name()).join("manifest.json").is_file() {
                 names.push(entry.file_name().to_string_lossy().to_string());
             }
         }
@@ -75,6 +81,20 @@ mod tests {
     fn prune_all_when_keep_zero() {
         let existing = vec!["a".to_string(), "b".to_string()];
         assert_eq!(snapshots_to_prune(&existing, 0).len(), 2);
+    }
+
+    #[test]
+    fn local_store_only_lists_manifest_bearing_snapshots() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A bind-DATA subdir (no manifest) must NOT be seen as a snapshot.
+        std::fs::create_dir_all(tmp.path().join("html-1a2b3c4d")).unwrap();
+        // A real recovery point carries its own manifest.json.
+        let snap = tmp.path().join("2026-07-28T00-00-00Z");
+        std::fs::create_dir_all(&snap).unwrap();
+        std::fs::write(snap.join("manifest.json"), "{}").unwrap();
+        let store = LocalStore { dir: tmp.path().to_path_buf() };
+        let listed = store.list().unwrap();
+        assert_eq!(listed, vec!["2026-07-28T00-00-00Z".to_string()], "data subdir must be excluded");
     }
 
     #[test]

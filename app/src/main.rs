@@ -66,6 +66,10 @@ enum Command {
         /// Actually deploy. Without this it is a no-op preview.
         #[arg(long)]
         yes: bool,
+        /// Seconds to wait for containers to become healthy before the health-gate
+        /// gives up (distinguishes a slow start from a genuinely unhealthy stack).
+        #[arg(long)]
+        wait_timeout: Option<u64>,
     },
     /// Safely upgrade a service's image: back up, snapshot, deploy, regress-or-accept.
     Upgrade {
@@ -83,6 +87,9 @@ enum Command {
         /// Proceed and auto-accept on a passing healthcheck. Without this it is a no-op.
         #[arg(long)]
         yes: bool,
+        /// Seconds to wait for containers to become healthy before giving up.
+        #[arg(long)]
+        wait_timeout: Option<u64>,
     },
     /// List the compose stacks discovered under a root directory.
     Stacks {
@@ -158,13 +165,15 @@ enum Command {
         apply: bool,
     },
     /// Sign a file with the release ed25519 key (hex), writing <file>.sig. Used by
-    /// CI with the YD_SIGNING_KEY secret; not for day-to-day use.
+    /// CI with the YD_SIGNING_KEY secret; not for day-to-day use. The key is read
+    /// from $YD_SIGNING_KEY by default — pass --key-hex only for local testing
+    /// (argv is visible in `ps`/CI logs, so prefer the env var).
     #[command(hide = true)]
     SignRelease {
         #[arg(long)]
         file: String,
         #[arg(long)]
-        key_hex: String,
+        key_hex: Option<String>,
     },
     /// Restore a stack's bind-mounted DATA from a backup (verify-gated; --yes to apply).
     Restore {
@@ -320,14 +329,15 @@ fn main() {
             run,
             dest,
         } => run_backup(&file, plan, run, dest.as_deref()),
-        Command::Deploy { file, yes } => run_deploy(&file, yes),
+        Command::Deploy { file, yes, wait_timeout } => run_deploy(&file, yes, wait_timeout),
         Command::Upgrade {
             file,
             repo,
             service,
             image,
             yes,
-        } => run_upgrade(&file, &repo, &service, &image, yes),
+            wait_timeout,
+        } => run_upgrade(&file, &repo, &service, &image, yes, wait_timeout),
         Command::Stacks { root } => run_stacks(&root),
         Command::Import { file, into, name } => run_import(&file, &into, name.as_deref()),
         Command::Notify { message } => run_notify(&message),
@@ -339,7 +349,7 @@ fn main() {
         Command::Git { action } => run_git(action),
         Command::Fleet { action } => run_fleet(action),
         Command::SelfUpdate { apply } => run_self_update(apply),
-        Command::SignRelease { file, key_hex } => run_sign_release(&file, &key_hex),
+        Command::SignRelease { file, key_hex } => run_sign_release(&file, key_hex.as_deref()),
         Command::Restore { file, from, yes } => run_restore(&file, &from, yes),
         Command::Serve { root, port, host } => {
             yarddog::web::serve(&host, port, std::path::Path::new(&root)).map_err(|e| e.to_string())
@@ -446,7 +456,9 @@ fn run_check(file: &str) -> Result<(), String> {
     }
     if !yarddog::guardrails::verdict(&findings) {
         eprintln!("guardrails: BLOCKED by the findings above");
-        std::process::exit(2);
+        // Blocked-by-guardrail is exit 3 across all commands (check/deploy/doctor/
+        // restore); exit 2 is reserved for a failed backup.
+        std::process::exit(3);
     }
     Ok(())
 }
@@ -495,29 +507,79 @@ fn run_backup(file: &str, plan: bool, run: bool, dest: Option<&str>) -> Result<(
 
     if run {
         let dest = dest.ok_or_else(|| "`--run` requires `--dest DIR`".to_string())?;
-        std::fs::create_dir_all(dest).map_err(|e| format!("creating {dest}: {e}"))?;
-        let manifest =
-            yarddog::backup::execute_plan(&backup_plan, dest, true, &RealRunner, &RealArchiver)
-                .map_err(|e| format!("backup failed: {e}"))?;
-
-        // Record an integrity manifest so the backup can be verified later.
-        let integrity = yarddog::verify::build_manifest(std::path::Path::new(dest))
-            .map_err(|e| format!("manifesting {dest}: {e}"))?;
-        let json = serde_json::to_string_pretty(&integrity)
-            .map_err(|e| format!("serializing manifest: {e}"))?;
-        std::fs::write(std::path::Path::new(dest).join("manifest.json"), json)
-            .map_err(|e| format!("writing manifest: {e}"))?;
-
-        println!(
-            "backed up to {dest}: dumps={:?} copies={:?} ({} files manifested)",
-            manifest.dumped,
-            manifest.copied,
-            integrity.entries.len()
+        eprintln!(
+            "warning: bind/volume copies run against LIVE containers — they are not \
+             point-in-time consistent (a file written mid-copy can be captured torn). \
+             `yd verify` checks the copy matches its manifest, NOT that it is a consistent \
+             snapshot. Stop the stack first for a guaranteed-consistent backup."
         );
+        // Build into a temp sibling and swap in only on success, so a failed run
+        // never clobbers the previous good backup and the published dir is always
+        // complete (data + manifest).
+        let final_dest = std::path::PathBuf::from(dest);
+        let tmp = partial_path(&final_dest);
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).map_err(|e| format!("creating {}: {e}", tmp.display()))?;
+        let tmp_str = tmp.to_string_lossy().to_string();
+        let built = (|| -> Result<(Vec<String>, Vec<String>, usize), String> {
+            let manifest = yarddog::backup::execute_plan(
+                &backup_plan,
+                &tmp_str,
+                true,
+                &RealRunner { compose: Some(compose.clone()) },
+                &RealArchiver,
+            )
+            .map_err(|e| format!("backup failed: {e}"))?;
+            let integrity = yarddog::verify::build_manifest(&tmp)
+                .map_err(|e| format!("manifesting: {e}"))?;
+            let json = serde_json::to_string_pretty(&integrity)
+                .map_err(|e| format!("serializing manifest: {e}"))?;
+            std::fs::write(tmp.join("manifest.json"), json)
+                .map_err(|e| format!("writing manifest: {e}"))?;
+            Ok((manifest.dumped, manifest.copied, integrity.entries.len()))
+        })();
+        let (dumped, copied, n) = match built {
+            Ok(x) => x,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(e);
+            }
+        };
+        publish_backup(&tmp, &final_dest).map_err(|e| format!("publishing backup: {e}"))?;
+        println!("backed up to {dest}: dumps={dumped:?} copies={copied:?} ({n} files manifested)");
     } else if plan {
         print!("{}", yarddog::backup::render_plan(&backup_plan));
     } else {
         println!("Nothing to do — pass --plan to preview or --run --dest DIR to execute.");
+    }
+    Ok(())
+}
+
+/// A hidden temp-sibling path for building a backup before it is published.
+fn partial_path(dest: &std::path::Path) -> std::path::PathBuf {
+    let name = dest.file_name().and_then(|n| n.to_str()).unwrap_or("backup");
+    dest.with_file_name(format!(".{name}.partial-{}", std::process::id()))
+}
+
+/// Atomically replace `dest` with the freshly-built `tmp`, keeping the previous
+/// backup until the new one is in place (so a crash mid-swap never leaves the
+/// operator with no backup).
+fn publish_backup(tmp: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    if dest.exists() {
+        let name = dest.file_name().and_then(|n| n.to_str()).unwrap_or("backup");
+        let old = dest.with_file_name(format!(".{name}.old-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&old);
+        std::fs::rename(dest, &old)?;
+        if let Err(e) = std::fs::rename(tmp, dest) {
+            let _ = std::fs::rename(&old, dest); // put the previous good backup back
+            return Err(e);
+        }
+        let _ = std::fs::remove_dir_all(&old);
+    } else {
+        if let Some(p) = dest.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        std::fs::rename(tmp, dest)?;
     }
     Ok(())
 }
@@ -538,7 +600,7 @@ fn announce_guardrails(compose: &std::path::Path) {
     }
 }
 
-fn run_deploy(file: &str, yes: bool) -> Result<(), String> {
+fn run_deploy(file: &str, yes: bool, wait_timeout: Option<u64>) -> Result<(), String> {
     let compose = std::path::Path::new(file);
     let stack_dir = compose.parent().unwrap_or_else(|| std::path::Path::new("."));
     // Version at the (mono)repo root: use the enclosing git repo if there is one
@@ -548,9 +610,17 @@ fn run_deploy(file: &str, yes: bool) -> Result<(), String> {
     let root = yarddog::gitver::repo_root(stack_dir).unwrap_or_else(|| stack_dir.to_path_buf());
     yarddog::gitver::ensure_repo(&root).map_err(|e| format!("cannot init versioning repo: {e}"))?;
     announce_guardrails(compose);
-    let outcome = yarddog::deploy::safe_deploy(compose, &root, yes, &RealBackupHook, &RealDeployer)
+    let outcome = yarddog::deploy::safe_deploy(compose, &root, yes, &RealBackupHook, &RealDeployer { wait_timeout })
         .map_err(|e| format!("deploy failed: {e}"))?;
     println!("deploy: {outcome:?}");
+    if let yarddog::deploy::DeployOutcome::Deployed { health_unverified } = &outcome {
+        if !health_unverified.is_empty() {
+            println!(
+                "note: deployed but health NOT verified — no healthcheck on: {}",
+                health_unverified.join(", ")
+            );
+        }
+    }
     if matches!(outcome, yarddog::deploy::DeployOutcome::BackupFailed(_)) {
         std::process::exit(2);
     }
@@ -570,6 +640,7 @@ fn run_upgrade(
     service: &str,
     image: &str,
     yes: bool,
+    wait_timeout: Option<u64>,
 ) -> Result<(), String> {
     // --yes proceeds and auto-accepts on a passing healthcheck. Version at the
     // enclosing (mono)repo root if one exists, else at the given --repo dir.
@@ -586,10 +657,23 @@ fn run_upgrade(
         yes,
         yes,
         &RealBackupHook,
-        &RealDeployer,
+        &RealDeployer { wait_timeout },
     )
     .map_err(|e| format!("upgrade failed: {e}"))?;
     println!("upgrade: {outcome:?}");
+    if let yarddog::upgrade::UpgradeOutcome::Upgraded { health_unverified } = &outcome {
+        if !health_unverified.is_empty() {
+            println!(
+                "note: upgraded but health NOT verified — no healthcheck on: {}",
+                health_unverified.join(", ")
+            );
+        }
+    }
+    // A failed pre-change backup means no recovery point was taken — mirror deploy
+    // (exit 2), not a silent success.
+    if matches!(outcome, yarddog::upgrade::UpgradeOutcome::BackupFailed(_)) {
+        std::process::exit(2);
+    }
     if matches!(outcome, yarddog::upgrade::UpgradeOutcome::Blocked(_)) {
         std::process::exit(3);
     }
@@ -605,23 +689,36 @@ fn run_upgrade(
 }
 
 /// Real deployer: `docker compose up -d --wait` in the stack directory. `--wait`
-/// blocks until containers are HEALTHY (or the wait times out), so a non-zero
-/// exit — the health-gate failing — is surfaced as `Err` and drives a regress.
-struct RealDeployer;
+/// blocks until containers are HEALTHY (or, with `--wait-timeout`, until it gives
+/// up), so a non-zero exit — the health-gate failing — is surfaced as `Err` and
+/// drives a regress. Docker's stderr is captured so timeout and unhealthy are
+/// distinguished in the reason rather than collapsed into one opaque message.
+struct RealDeployer {
+    wait_timeout: Option<u64>,
+}
 impl yarddog::deploy::Deployer for RealDeployer {
     fn deploy(&self, stack_dir: &std::path::Path) -> std::io::Result<()> {
-        let status = std::process::Command::new("docker")
-            .args(yarddog::flow::compose_up_args())
+        let out = std::process::Command::new("docker")
+            .args(yarddog::flow::compose_up_args(self.wait_timeout))
             .current_dir(stack_dir)
-            .status()?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "docker compose up --wait failed (unhealthy or timed out)",
-            ))
+            .output()?;
+        if out.status.success() {
+            return Ok(());
         }
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let low = stderr.to_ascii_lowercase();
+        let classified = if low.contains("timeout") || low.contains("timed out") {
+            match self.wait_timeout {
+                Some(t) => format!("health-gate timed out after {t}s (the stack may just be slow to start — raise --wait-timeout)"),
+                None => "health-gate timed out (raise --wait-timeout for a slow-starting stack)".to_string(),
+            }
+        } else {
+            "one or more services became unhealthy".to_string()
+        };
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("docker compose up --wait failed: {classified}: {}", stderr.trim()),
+        ))
     }
 }
 
@@ -636,16 +733,38 @@ impl yarddog::deploy::BackupHook for RealBackupHook {
         let yaml = std::fs::read_to_string(&compose)?;
         let env: HashMap<String, String> = std::env::vars().collect();
         let dest = yarddog::backup::default_backup_dest(stack_dir);
-        std::fs::create_dir_all(&dest)?;
-        let dest_str = dest.to_string_lossy().to_string();
         let volumes = RealVolumeInspector::new();
         let net = RealNetworkProbe;
-        let manifest = yarddog::backup::backup_stack(
-            &yaml, &env, &dest_str, true, &volumes, &net, &RealRunner, &RealArchiver,
-        )?;
+        let compose_abs = std::fs::canonicalize(&compose).unwrap_or(compose);
+        // Build into a temp sibling and publish atomically so a failed pre-change
+        // backup can't destroy the previous recovery point.
+        let tmp = partial_path(&dest);
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp)?;
+        let tmp_str = tmp.to_string_lossy().to_string();
+        let built = yarddog::backup::backup_stack(
+            &yaml,
+            &env,
+            &tmp_str,
+            true,
+            &volumes,
+            &net,
+            &RealRunner { compose: Some(compose_abs) },
+            &RealArchiver,
+        );
+        let manifest = match built {
+            Ok(m) => m,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(e);
+            }
+        };
+        publish_backup(&tmp, &dest)?;
         println!(
-            "pre-change backup -> {dest_str}: dumps={:?} copies={:?}",
-            manifest.dumped, manifest.copied
+            "pre-change backup -> {}: dumps={:?} copies={:?}",
+            dest.display(),
+            manifest.dumped,
+            manifest.copied
         );
         Ok(())
     }
@@ -736,7 +855,7 @@ fn run_self_update(apply: bool) -> Result<(), String> {
         return Ok(());
     }
 
-    if yarddog::selfupdate::RELEASE_PUBKEY_HEX.is_empty() {
+    if yarddog::selfupdate::RELEASE_PUBKEY_HEX.trim().is_empty() {
         println!("note: releases are not yet signed — verifying integrity by SHA256 only");
     }
     let exe = std::env::current_exe().map_err(|e| format!("cannot locate current exe: {e}"))?;
@@ -746,6 +865,9 @@ fn run_self_update(apply: bool) -> Result<(), String> {
             println!("updated yd {from} -> {to}  (previous binary kept at {})", backup.display());
         }
         ApplyOutcome::NoAsset(a) => return Err(format!("no release asset '{a}' for this platform")),
+        ApplyOutcome::ChecksumMissing(a) => {
+            return Err(format!("release asset '{a}' is not listed in SHA256SUMS — refusing to install"))
+        }
         ApplyOutcome::ChecksumMismatch => return Err("SHA256 verification failed — refusing to install".into()),
         ApplyOutcome::SignatureInvalid => {
             return Err("release signature missing or invalid — refusing to install".into())
@@ -755,9 +877,16 @@ fn run_self_update(apply: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn run_sign_release(file: &str, key_hex: &str) -> Result<(), String> {
+fn run_sign_release(file: &str, key_hex: Option<&str>) -> Result<(), String> {
+    // Prefer the env var (not visible in process listings); fall back to --key-hex
+    // for local use only.
+    let key = match key_hex {
+        Some(k) => k.to_string(),
+        None => std::env::var("YD_SIGNING_KEY")
+            .map_err(|_| "no signing key: set $YD_SIGNING_KEY or pass --key-hex")?,
+    };
     let bytes = std::fs::read(file).map_err(|e| format!("reading {file}: {e}"))?;
-    let sig = yarddog::selfupdate::sign_hex(key_hex.trim(), &bytes)
+    let sig = yarddog::selfupdate::sign_hex(key.trim(), &bytes)
         .ok_or("invalid signing key (want 64 hex chars = 32-byte ed25519 seed)")?;
     let out = format!("{file}.sig");
     std::fs::write(&out, sig).map_err(|e| format!("writing {out}: {e}"))?;
@@ -956,6 +1085,11 @@ fn run_version(action: VersionAction) -> Result<(), String> {
             }
         }
         VersionAction::Restore { repo, sha } => {
+            // A revision must be a hex sha — otherwise a leading-dash value could
+            // reach a git option slot rather than being treated as a commit.
+            if !(4..=64).contains(&sha.len()) || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err("invalid revision (want a hex git sha)".into());
+            }
             let new = gitver::restore(p(&repo), &sha).map_err(|e| format!("restore failed: {e}"))?;
             println!("restored as {}", &new[..new.len().min(12)]);
         }
@@ -964,23 +1098,41 @@ fn run_version(action: VersionAction) -> Result<(), String> {
 }
 
 fn run_prune(dest: &str, keep: usize) -> Result<(), String> {
+    use yarddog::retention::SnapshotStore;
     let store = yarddog::retention::LocalStore {
         dir: std::path::PathBuf::from(dest),
     };
+    // A recognized snapshot is a subdir with its own manifest.json. If there are
+    // none, say so plainly rather than reporting "pruned 0" — otherwise an operator
+    // could think retention ran when the dest holds only flat backup data.
+    let found = store.list().map_err(|e| format!("prune failed: {e}"))?;
+    if found.is_empty() {
+        println!("no recovery-point snapshots found under {dest} — nothing to prune");
+        return Ok(());
+    }
     let removed = yarddog::retention::apply_retention(&store, keep)
         .map_err(|e| format!("prune failed: {e}"))?;
-    println!("pruned {} snapshot(s): {:?}", removed.len(), removed);
+    println!("pruned {} of {} snapshot(s): {:?}", removed.len(), found.len(), removed);
     Ok(())
 }
 
-/// Real dump runner: streams a container's dump command output to a file.
-struct RealRunner;
+/// Real dump runner: streams a container's dump command output to a file. Carries
+/// the compose path so `docker compose -f <compose> exec` targets the RIGHT
+/// project regardless of the process CWD (the pre-change backup hook doesn't chdir).
+struct RealRunner {
+    compose: Option<std::path::PathBuf>,
+}
 impl yarddog::backup::CommandRunner for RealRunner {
     fn run_dump(&self, service: &str, command: &str, dest_dir: &str) -> std::io::Result<()> {
         let out_path = std::path::Path::new(dest_dir).join(format!("{service}.dump"));
         let out = std::fs::File::create(&out_path)?;
-        let status = std::process::Command::new("docker")
-            .args(["compose", "exec", "-T", service, "sh", "-c", command])
+        let mut cmd = std::process::Command::new("docker");
+        cmd.arg("compose");
+        if let Some(c) = &self.compose {
+            cmd.arg("-f").arg(c);
+        }
+        let status = cmd
+            .args(["exec", "-T", service, "sh", "-c", command])
             .stdout(out)
             .status()?;
         if !status.success() {
@@ -1044,11 +1196,25 @@ fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let to = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
+        let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            // Recreate the link, don't dereference it (a symlink-to-dir would
+            // otherwise be handed to fs::copy and abort the whole backup).
+            if let Ok(target) = std::fs::read_link(entry.path()) {
+                let _ = std::fs::remove_file(&to);
+                #[cfg(unix)]
+                let _ = std::os::unix::fs::symlink(&target, &to);
+                #[cfg(windows)]
+                let _ = std::os::windows::fs::symlink_file(&target, &to);
+                #[cfg(not(any(unix, windows)))]
+                let _ = target;
+            }
+        } else if ft.is_dir() {
             copy_dir_all(&entry.path(), &to)?;
-        } else {
+        } else if ft.is_file() {
             std::fs::copy(entry.path(), to)?;
         }
+        // else: socket/fifo/device (e.g. a live DB socket) — skip, not backup data
     }
     Ok(())
 }

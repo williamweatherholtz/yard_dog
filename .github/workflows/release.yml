@@ -197,7 +197,9 @@ jobs:
           if [ -n "$YD_SIGNING_KEY" ]; then
             bin="staging/yd-x86_64-linux/yd-x86_64-linux"
             chmod +x "$bin"
-            "$bin" sign-release --file dist/SHA256SUMS --key-hex "$YD_SIGNING_KEY"
+            # Key comes from $YD_SIGNING_KEY (env), not argv — argv is visible in
+            # process listings and can leak into logs.
+            "$bin" sign-release --file dist/SHA256SUMS
             ls -la dist/SHA256SUMS.sig
           else
             echo "no YD_SIGNING_KEY secret set — this release is unsigned (checksum only)"

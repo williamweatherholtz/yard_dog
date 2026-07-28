@@ -30,19 +30,29 @@ pub enum Finding {
 }
 
 fn hash_file(path: &Path) -> io::Result<(String, u64)> {
-    let bytes = std::fs::read(path)?;
+    // Stream the file through the hasher with a fixed buffer so a multi-GB volume
+    // tar or DB dump doesn't have to be read fully into memory.
+    let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Ok((format!("{:x}", hasher.finalize()), bytes.len() as u64))
+    let size = io::copy(&mut file, &mut hasher)?;
+    Ok((format!("{:x}", hasher.finalize()), size))
 }
 
 fn walk(dir: &Path, base: &Path, out: &mut Vec<std::path::PathBuf>) -> io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if entry.file_type()?.is_dir() {
+        // Only recurse real directories and collect regular files. A symlink (even
+        // one pointing at a directory) has is_dir()==false, so it would otherwise be
+        // treated as a file and fs::read would fail the whole manifest — skip links
+        // and special files instead of aborting.
+        let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            continue;
+        }
+        if ft.is_dir() {
             walk(&path, base, out)?;
-        } else {
+        } else if ft.is_file() {
             out.push(path);
         }
     }

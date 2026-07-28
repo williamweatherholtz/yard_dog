@@ -13,9 +13,15 @@ use std::path::{Path, PathBuf};
 
 /// The `docker compose up` args used for a health-gated deploy. `--wait` makes
 /// the deploy return only once containers are HEALTHY (not merely started), so
-/// the health-gate is real.
-pub fn compose_up_args() -> Vec<&'static str> {
-    vec!["compose", "up", "-d", "--wait"]
+/// the health-gate is real. An optional `--wait-timeout` bounds how long to wait
+/// so a slow-but-healthy stack can be distinguished from an unhealthy one.
+pub fn compose_up_args(wait_timeout_secs: Option<u64>) -> Vec<String> {
+    let mut a = vec!["compose".to_string(), "up".into(), "-d".into(), "--wait".into()];
+    if let Some(t) = wait_timeout_secs {
+        a.push("--wait-timeout".into());
+        a.push(t.to_string());
+    }
+    a
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,8 +37,11 @@ pub enum Phase {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    Deployed,
-    Upgraded,
+    /// Deployed. `health_unverified` lists services with no healthcheck — `up
+    /// --wait` treats those as satisfied once merely running, so their health was
+    /// NOT actually verified. A non-empty list means "up, but not proven healthy".
+    Deployed { health_unverified: Vec<String> },
+    Upgraded { health_unverified: Vec<String> },
     Regressed(String),
     /// The change failed AND the rollback redeploy also failed — the live stack
     /// is in a bad state and needs operator attention.
@@ -153,10 +162,17 @@ pub fn run(
     trace.push(Phase::Decide);
     let healthy = health.is_ok();
     if healthy && change.accept {
+        // Services with no healthcheck were only proven *running*, not healthy —
+        // report them so exit 0 doesn't falsely imply verified health.
+        let health_unverified: Vec<String> = findings
+            .iter()
+            .filter(|f| f.rule == "no-healthcheck")
+            .map(|f| f.service.clone())
+            .collect();
         return Ok(if change.image_change.is_some() {
-            Outcome::Upgraded
+            Outcome::Upgraded { health_unverified }
         } else {
-            Outcome::Deployed
+            Outcome::Deployed { health_unverified }
         });
     }
 
@@ -263,7 +279,9 @@ mod tests {
 
     #[test]
     fn deploy_up_args_wait_for_health() {
-        assert!(compose_up_args().contains(&"--wait"), "gate must wait for health");
+        assert!(compose_up_args(None).contains(&"--wait".to_string()), "gate must wait for health");
+        let with_timeout = compose_up_args(Some(90));
+        assert!(with_timeout.contains(&"--wait-timeout".to_string()) && with_timeout.contains(&"90".to_string()));
     }
 
     #[test]
@@ -321,7 +339,7 @@ mod tests {
         };
         let mut trace = Vec::new();
         let out = run(&ch, &NoopBackup, &OkDeployer, &mut trace).unwrap();
-        assert_eq!(out, Outcome::Upgraded, "a floating-tag fix must not be blocked");
+        assert!(matches!(out, Outcome::Upgraded { .. }), "a floating-tag fix must not be blocked: {out:?}");
     }
 
     #[test]
@@ -357,7 +375,7 @@ mod tests {
             write_state(dir.path(), state).unwrap();
             let mut trace = Vec::new();
             let out = run(&change(&compose, dir.path()), &NoopBackup, &OkDeployer, &mut trace).unwrap();
-            assert_eq!(out, Outcome::Deployed, "{state:?} must not be lifecycle-blocked");
+            assert!(matches!(out, Outcome::Deployed { .. }), "{state:?} must not be lifecycle-blocked: {out:?}");
         }
     }
 
@@ -366,7 +384,7 @@ mod tests {
         let (dir, compose) = repo("services:\n  app:\n    image: nginx:1.27\n");
         let mut trace = Vec::new();
         let out = run(&change(&compose, dir.path()), &NoopBackup, &OkDeployer, &mut trace).unwrap();
-        assert_eq!(out, Outcome::Deployed);
+        assert!(matches!(out, Outcome::Deployed { .. }), "got {out:?}");
         assert_eq!(
             trace,
             vec![
@@ -378,6 +396,20 @@ mod tests {
                 Phase::Decide
             ]
         );
+    }
+
+    #[test]
+    fn deploy_reports_services_whose_health_was_not_verified() {
+        // No healthcheck on `app` ⇒ `up --wait` only proves it's running. The
+        // outcome must name it so exit 0 doesn't imply verified health.
+        let (dir, compose) = repo("services:\n  app:\n    image: nginx:1.27\n");
+        let out = run(&change(&compose, dir.path()), &NoopBackup, &OkDeployer, &mut Vec::new()).unwrap();
+        match out {
+            Outcome::Deployed { health_unverified } => {
+                assert_eq!(health_unverified, vec!["app".to_string()]);
+            }
+            other => panic!("expected Deployed, got {other:?}"),
+        }
     }
 
     #[test]

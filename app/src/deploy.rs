@@ -20,7 +20,9 @@ pub trait BackupHook {
 /// The result of a safe-deploy attempt.
 #[derive(Debug, PartialEq, Eq)]
 pub enum DeployOutcome {
-    Deployed,
+    /// Deployed. `health_unverified` names services with no healthcheck (running
+    /// but not proven healthy) — empty means all deployed services were verified.
+    Deployed { health_unverified: Vec<String> },
     RolledBack,
     /// Deploy failed and the rollback redeploy also failed — needs attention.
     RollbackFailed(String),
@@ -50,7 +52,9 @@ pub fn safe_deploy(
     };
     let mut trace = Vec::new();
     Ok(match flow::run(&change, backup, deployer, &mut trace)? {
-        Outcome::Deployed | Outcome::Upgraded => DeployOutcome::Deployed,
+        Outcome::Deployed { health_unverified } | Outcome::Upgraded { health_unverified } => {
+            DeployOutcome::Deployed { health_unverified }
+        }
         Outcome::Regressed(_) => DeployOutcome::RolledBack,
         Outcome::RegressFailed(r) => DeployOutcome::RollbackFailed(r),
         // A plain deploy never carries an image change, so NoSuchService cannot
@@ -131,7 +135,7 @@ mod tests {
         std::fs::write(&compose, "services:\n  web:\n    image: nginx:1.27\n").unwrap();
         let backup = RecBackup::default();
         let out = safe_deploy(&compose, dir.path(), true, &backup, &OkDeployer).unwrap();
-        assert_eq!(out, DeployOutcome::Deployed);
+        assert!(matches!(out, DeployOutcome::Deployed { .. }), "got {out:?}");
         assert!(*backup.called.borrow(), "pre-change backup must run");
         assert_eq!(gitver::history(dir.path()).unwrap().len(), 1);
     }
