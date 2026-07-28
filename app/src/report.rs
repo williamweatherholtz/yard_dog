@@ -85,8 +85,13 @@ pub fn build_report(
             let mut existence = None;
             let mut issues = Vec::new();
 
+            // Only probe/create a real host PATH. A network-backed *named volume*
+            // (MountType::Network with a volume-name source, e.g. an NFS/CIFS
+            // driver volume) is managed by Docker — stat'ing or creating it by its
+            // bare name would falsely report "missing" and `yd fix` would mkdir a
+            // junk dir named after the volume in the CWD.
             if is_host_path(mount_type) {
-                if let Some(src) = &m.source {
+                if let Some(src) = m.source.as_ref().filter(|s| crate::classify::is_path_source(s.as_str())) {
                     let ex = check_existence(src, fs);
                     if !ex.exists {
                         issues.push(Issue::MissingPath { path: src.clone() });

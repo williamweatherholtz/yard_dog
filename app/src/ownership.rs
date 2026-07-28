@@ -23,7 +23,11 @@ pub enum OwnershipIssue {
 /// LinuxServer PUID/PGID env vars); `None` when unknown.
 pub fn detect_ownership(meta: &PathMeta, expected: Option<(u32, u32)>) -> Vec<OwnershipIssue> {
     let mut issues = Vec::new();
-    if meta.uid == 0 {
+    // A root-owned path is only a problem for a NON-root container. When the stack
+    // declares it runs as root (PUID=0), root ownership is correct — don't flag it
+    // and then advise chowning away from a correct state.
+    let expects_root = matches!(expected, Some((0, _)));
+    if meta.uid == 0 && !expects_root {
         issues.push(OwnershipIssue::RootOwned);
     }
     if let Some((puid, pgid)) = expected {
@@ -59,6 +63,13 @@ mod tests {
     fn flags_root_owned_directory() {
         let issues = detect_ownership(&meta(0, 0), None);
         assert_eq!(issues, vec![OwnershipIssue::RootOwned]);
+    }
+
+    #[test]
+    fn root_owned_not_flagged_when_container_expects_root() {
+        // PUID=0/PGID=0 ⇒ root ownership is correct, not a finding.
+        let issues = detect_ownership(&meta(0, 0), Some((0, 0)));
+        assert!(issues.is_empty(), "root-owned is correct for a root container: {issues:?}");
     }
 
     #[test]

@@ -178,7 +178,7 @@
   .confirm{background:var(--panel);border:1px solid var(--line-2);border-radius:10px;box-shadow:var(--shadow);padding:13px 15px;display:flex;align-items:center;gap:12px;}
   .confirm .txt{flex:1;font-size:13.5px;}
   .toast{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:9px;box-shadow:var(--shadow);padding:11px 14px;font-size:13px;display:flex;align-items:center;gap:9px;animation:slidein .16s ease;}
-  .toast.ok{border-left-color:var(--ok);} .toast.bad{border-left-color:var(--bad);}
+  .toast.ok{border-left-color:var(--ok);} .toast.bad{border-left-color:var(--bad);} .toast.warn{border-left-color:var(--warn);}
   @keyframes slidein{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:none;}}
 
   /* console dock */
@@ -191,7 +191,7 @@
   .dock-body{flex:1;overflow:auto;padding:10px 14px;background:var(--sunken);}
   .dock.collapsed .dock-body{display:none;}
   #console{font:12.5px/1.6 var(--mono);white-space:pre-wrap;word-break:break-word;margin:0;}
-  #console .cmd{color:var(--accent-ink);font-weight:700;} #console .ok{color:var(--ok);} #console .bad{color:var(--bad);} #console .dim{color:var(--muted);}
+  #console .cmd{color:var(--accent-ink);font-weight:700;} #console .ok{color:var(--ok);} #console .bad{color:var(--bad);} #console .dim{color:var(--muted);} #console .warn{color:var(--warn);font-weight:700;}
   .spin{display:inline-block;width:11px;height:11px;border:2px solid var(--muted);border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px;}
   @keyframes sp{to{transform:rotate(360deg);}}
   @media(prefers-reduced-motion:reduce){.spin{animation:none;}.toast{animation:none;}.dock{transition:none;}}
@@ -331,7 +331,7 @@ function renderOverview(){const b=$("#tabbody");
   const bar=el("div","bar");const act=(l,cls,fn)=>{const x=el("button","btn "+cls,l);x.onclick=fn;bar.append(x);};
   act("Deploy","primary",()=>confirmAct("Deploy “"+stackName(current)+"”? Backs up, snapshots, health-gates, and rolls back on failure.","/api/deploy",{compose:current},"deploy"));
   act("Refresh status","",()=>refreshStatus());
-  act("Back up","",()=>confirmAct("Run an application-consistent backup of “"+stackName(current)+"”?","/api/backup",{compose:current},"backup"));
+  act("Back up","",()=>confirmAct("Back up “"+stackName(current)+"” now? Copies run against the LIVE stack, so they are NOT point-in-time consistent — stop the stack first for a guaranteed-consistent backup.","/api/backup",{compose:current},"backup"));
   const trans={draft:["activate","archive"],active:["deprecate","archive"],deprecated:["activate","archive"],archived:["restore"]};
   for(const ev of (trans[detail.lifecycle]||[]))act(ev[0].toUpperCase()+ev.slice(1),"",()=>doAct("/api/lifecycle",{compose:current,event:ev},"lifecycle "+ev).then(()=>selectStack(current,true)));
   act("Down","danger",()=>confirmAct("Stop and remove this stack's containers (docker compose down)?","/api/down",{compose:current},"down",true));
@@ -479,12 +479,12 @@ async function showDiff(from,to){const pre=$("#diffout");pre.innerHTML="Loading�
 
 // ---- Backups ----
 async function renderBackups(){const b=$("#tabbody");
-  const bar=el("div","bar");const bk=el("button","btn primary","Back up now");bk.onclick=()=>confirmAct("Run an application-consistent backup?","/api/backup",{compose:current},"backup").then(ok=>{if(ok)renderShell();});bar.append(bk);b.append(bar);
+  const bar=el("div","bar");const bk=el("button","btn primary","Back up now");bk.onclick=()=>confirmAct("Back up now? Copies run against the LIVE stack — NOT point-in-time consistent. Stop the stack first for a guaranteed-consistent backup.","/api/backup",{compose:current},"backup").then(ok=>{if(ok)renderShell();});bar.append(bk);b.append(bar);
   const {data}=await api("/api/backups?compose="+enc(current));const items=data.items||[];
   if(!items.length){b.append(el("p","muted","No recovery points yet — take a backup to create one."));return;}
   const tbl=el("table");const hr=el("tr");["Recovery point","Files","Integrity",""].forEach(h=>hr.append(el("th",null,h)));tbl.append(hr);
   for(const it of items){const tr=el("tr");tr.append(el("td","m",it.name));tr.append(el("td",null,String(it.entries)));
-    const v=el("td");v.append(it.ok?chip("ok","verified"):chip("bad",it.issues+" issue"+(it.issues===1?"":"s")));tr.append(v);
+    const v=el("td");if(it.ok){const c=chip("ok","integrity ✓");c.title="Contents match the recorded manifest (integrity). This does NOT prove a point-in-time-consistent snapshot — a live copy can be torn.";v.append(c);}else{v.append(chip("bad",it.issues+" issue"+(it.issues===1?"":"s")));}tr.append(v);
     const ac=el("td");const rb=el("button","btn danger sm","Restore…");rb.onclick=()=>confirmAct("Restore data from “"+it.name+"”? This OVERWRITES the stack's current bind data (the backup is verified first).","/api/backup/restore",{compose:current,name:it.name},"restore data",true);ac.append(rb);tr.append(ac);
     tbl.append(tr);}
   b.append(tbl);}
@@ -613,7 +613,7 @@ async function renderGit(){closeTerm();current=null;setNav("nav-git");renderRail
   const status=el("div","bar");status.style.marginBottom="14px";
   if(data.remote){status.append(el("span","pill ready","Connected"));status.append(el("span","chip","")); status.lastChild.remove();
     const u=el("span","chip");u.className="chip";u.textContent=data.remote;status.append(u);
-    if(data.ahead>=0)status.append(el("span","muted",`${data.ahead} ahead · ${data.behind} behind`));}
+    if(data.ahead>=0){const ab=el("span","muted",`${data.ahead} ahead · ${data.behind} behind`);ab.title="Counts reflect the last fetch. Click Refresh to update from the remote.";status.append(ab);}}
   else status.append(el("span","pill notready","Not connected"));
   box.append(status);
   const f=el("div","field");f.append(el("label",null,"Remote URL"));
@@ -624,7 +624,9 @@ async function renderGit(){closeTerm();current=null;setNav("nav-git");renderRail
   const cn=el("button","btn primary",data.remote?"Update remote":"Connect");cn.onclick=()=>{const url=inp.value.trim();if(!url){toast("bad","Enter a remote URL");return;}doGit("/api/git/connect",{url},"connect").then(renderGit);};
   bar.append(cn);
   if(data.remote){const ps=el("button","btn","Push");ps.onclick=()=>doGit("/api/git/push",{},"push").then(renderGit);
-    const pl=el("button","btn","Pull");pl.onclick=()=>doGit("/api/git/pull",{},"pull").then(renderGit);bar.append(ps);bar.append(pl);}
+    const pl=el("button","btn","Pull");pl.onclick=()=>doGit("/api/git/pull",{},"pull").then(renderGit);
+    const rf=el("button","btn","Refresh");rf.title="Fetch remote state to update ahead/behind";rf.onclick=()=>doGit("/api/git/fetch",{},"fetch").then(renderGit);
+    bar.append(ps);bar.append(pl);bar.append(rf);}
   box.append(bar);m.append(box);}
 async function doGit(path,body,label){logLine("cmd","▶ git "+label);const {data}=await post(path,body);
   if(data.error){logLine("bad","✗ "+data.error);toast("bad","Git "+label+" failed");return;}
@@ -641,9 +643,20 @@ async function doGit(path,body,label){logLine("cmd","▶ git "+label);const {dat
 async function confirmAct(msg,path,body,label,danger){if(!await askConfirm(msg,"Confirm",danger))return false;await doAct(path,body,label);return true;}
 async function doAct(path,body,label){logLine("cmd","▶ yd "+label);const {data}=await post(path,body);
   if(data.error){logLine("bad","✗ "+data.error);toast("bad",label+" failed");return;}
-  if(data.stdout&&data.stdout.trim())logLine("",data.stdout.trimEnd());
-  if(data.stderr&&data.stderr.trim())logLine("dim",data.stderr.trimEnd());
-  if("ok" in data){logLine(data.ok?"ok":"bad",(data.ok?"✓ done":"✗ failed")+(data.exit!=null?" (exit "+data.exit+")":""));toast(data.ok?"ok":"bad",label+(data.ok?" done":" failed"));}
+  let healthUnverified=false;
+  if(data.stdout&&data.stdout.trim()){
+    const out=data.stdout.trimEnd();
+    // Exit 0 alone must not read as "proven healthy": elevate a health-not-verified
+    // note to a visible warning rather than a plain console line.
+    if(/health NOT verified/i.test(out)){healthUnverified=true;logLine("warn","⚠ "+out);}
+    else logLine("",out);
+  }
+  // A `warning:` line (e.g. the backup not-point-in-time caveat) is a real signal,
+  // not dim noise — surface it as a warning.
+  if(data.stderr&&data.stderr.trim())logLine(/warning:/i.test(data.stderr)?"warn":"dim",data.stderr.trimEnd());
+  if("ok" in data){logLine(data.ok?"ok":"bad",(data.ok?"✓ done":"✗ failed")+(data.exit!=null?" (exit "+data.exit+")":""));
+    if(data.ok&&healthUnverified)toast("warn",label+" — health NOT verified");
+    else toast(data.ok?"ok":"bad",label+(data.ok?" done":" failed"));}
   loadStacks();}
 
 // ---- new stack (inline panel; no prompts, no kind) ----

@@ -44,8 +44,11 @@ fn looks_interpolated(v: &str) -> bool {
         return true;
     }
     if let Some(rest) = v.strip_prefix('$') {
-        return matches!(rest.chars().next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
-            && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        // A `$` immediately followed by a variable-name start is a reference
+        // (`$VAR`, `$PREFIX-suffix`, `$VAR/path`). `$$secret` (escaped literal) and
+        // `$2b$...` (a `$` not starting a name) are NOT interpolation and stay
+        // eligible for flagging.
+        return matches!(rest.chars().next(), Some(c) if c.is_ascii_alphabetic() || c == '_');
     }
     false
 }

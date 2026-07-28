@@ -51,7 +51,7 @@ fn is_network_fs(fs: &str) -> bool {
 
 /// A compose source denotes a host path (bind) rather than a named volume when
 /// it contains a path separator or begins with `.` / `~` / `/`.
-fn is_path_source(source: &str) -> bool {
+pub fn is_path_source(source: &str) -> bool {
     source.starts_with('/')
         || source.starts_with('.')
         || source.starts_with('~')

@@ -121,11 +121,27 @@ pub fn actions_for(issue: &Issue, expected: Option<(u32, u32)>) -> Vec<FixAction
 /// The real mutating filesystem. Ownership/permission ops are POSIX-only.
 pub struct RealFsMut;
 
+/// Refuse to mutate a path whose final component is a symlink. chown/chmod follow
+/// symlinks at the OS level, so a bind source replaced by a symlink → /etc would
+/// let a confirmed `yd fix` chown the target and slip past the (string-based)
+/// protected-path guard. The fix path should only touch real data dirs/files.
+#[cfg(unix)]
+fn refuse_symlink(path: &str) -> io::Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.file_type().is_symlink() => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("refusing to modify {path}: it is a symlink (would follow to its target)"),
+        )),
+        _ => Ok(()),
+    }
+}
+
 impl HostFsMut for RealFsMut {
     fn create_dir(&self, path: &str, owner: Option<(u32, u32)>) -> io::Result<()> {
         std::fs::create_dir_all(path)?;
         #[cfg(unix)]
         if let Some((uid, gid)) = owner {
+            refuse_symlink(path)?;
             std::os::unix::fs::chown(path, Some(uid), Some(gid))?;
         }
         #[cfg(not(unix))]
@@ -136,6 +152,7 @@ impl HostFsMut for RealFsMut {
     fn chown(&self, path: &str, uid: u32, gid: u32) -> io::Result<()> {
         #[cfg(unix)]
         {
+            refuse_symlink(path)?;
             std::os::unix::fs::chown(path, Some(uid), Some(gid))
         }
         #[cfg(not(unix))]
@@ -152,6 +169,7 @@ impl HostFsMut for RealFsMut {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            refuse_symlink(path)?;
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
         }
         #[cfg(not(unix))]

@@ -146,13 +146,27 @@ pub fn run(
         .and_then(|h| h.first().map(|(sha, _)| sha.clone()));
 
     // Apply the change (an upgrade edits the service image; a plain deploy is a
-    // no-op edit), then snapshot exactly what is about to be deployed.
+    // no-op edit), then snapshot exactly what is about to be deployed. Capture the
+    // pre-edit bytes so that if the edit OR the snapshot fails, the on-disk compose
+    // is restored — otherwise a snapshot failure leaves a modified-but-uncommitted,
+    // undeployed file (new-image drift the next inspection would misread).
     trace.push(Phase::Apply);
+    let original = change.image_change.and_then(|_| std::fs::read(change.compose_path).ok());
     if let Some((service, image)) = change.image_change {
-        set_service_image(change.compose_path, service, image)?;
+        if let Err(e) = set_service_image(change.compose_path, service, image) {
+            if let Some(bytes) = &original {
+                let _ = std::fs::write(change.compose_path, bytes);
+            }
+            return Err(e);
+        }
     }
     trace.push(Phase::Snapshot);
-    gitver::snapshot_scoped(change.repo, &rel, "yd flow snapshot")?;
+    if let Err(e) = gitver::snapshot_scoped(change.repo, &rel, "yd flow snapshot") {
+        if let Some(bytes) = &original {
+            let _ = std::fs::write(change.compose_path, bytes);
+        }
+        return Err(e);
+    }
 
     // Health-gate: the Deployer waits for containers to become HEALTHY; `Err`
     // means unhealthy/timed-out.
@@ -468,6 +482,27 @@ mod tests {
         let out = run(&change(&compose, dir.path()), &NoopBackup, &deployer, &mut trace).unwrap();
         assert!(matches!(out, Outcome::RegressFailed(_)), "got {out:?}");
         assert_eq!(*deployer.calls.borrow(), 1, "no rollback redeploy is possible without a prior");
+    }
+
+    #[test]
+    fn snapshot_failure_restores_compose_no_drift() {
+        // The repo dir is NOT a git repo, so snapshot_scoped fails AFTER the image
+        // edit — the on-disk compose must be restored, leaving no uncommitted drift.
+        let dir = tempfile::tempdir().unwrap();
+        let compose = dir.path().join("docker-compose.yml");
+        std::fs::write(&compose, "services:\n  app:\n    image: nginx:1.27\n").unwrap();
+        let ch = Change {
+            compose_path: &compose,
+            repo: dir.path(),
+            image_change: Some(("app", "nginx:1.29")),
+            confirmed: true,
+            accept: true,
+        };
+        let out = run(&ch, &NoopBackup, &OkDeployer, &mut Vec::new());
+        assert!(out.is_err(), "a snapshot failure must propagate as Err, got {out:?}");
+        let on_disk = std::fs::read_to_string(&compose).unwrap();
+        assert!(on_disk.contains("nginx:1.27"), "compose must be restored; got: {on_disk}");
+        assert!(!on_disk.contains("nginx:1.29"), "no uncommitted drift may remain on disk");
     }
 
     #[test]

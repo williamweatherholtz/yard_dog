@@ -16,6 +16,8 @@ const BOT_EMAIL: &str = "noreply@yarddog.local";
 /// subdir is not; data FILES (.env, *.sqlite, *.db, secrets) are excluded anywhere.
 const GITIGNORE: &str = "# Yard Dog: never version data or secrets\n\
 .yd-backups/\n\
+.yd-backups.partial-*\n\
+.yd-backups.old-*\n\
 .yd-git.lock\n\
 .env\n\
 *.env\n\
@@ -357,18 +359,22 @@ pub fn pull(root: &Path) -> io::Result<String> {
     git_ok(root, &["pull", "--ff-only"])
 }
 
+/// Explicitly refresh remote-tracking refs (`git fetch origin`). This is the
+/// mutating counterpart to `ahead_behind`'s cached read — invoked from a POST so a
+/// visited page can't drive network fetches via a GET. Serialized under the index
+/// lock since it writes refs/FETCH_HEAD.
+pub fn fetch_remote(root: &Path) -> io::Result<String> {
+    let _lock = acquire_index_lock(root);
+    git_ok(root, &["fetch", "origin"])
+}
+
 /// (ahead, behind) commit counts vs `origin/<branch>` after a fetch, or `None`
 /// if there is no remote / upstream to compare against.
 pub fn ahead_behind(root: &Path) -> Option<(usize, usize)> {
-    // Best-effort refresh — a failed fetch (offline/auth) shouldn't collapse to
-    // "in sync"; fall back to the last-known tracking ref so counts are stale, not
-    // silently zero. `None` is then reserved for "no upstream configured". The
-    // fetch writes remote-tracking refs/FETCH_HEAD, so serialize it under the
-    // cross-process index lock — otherwise two concurrent /api/git reads race.
-    {
-        let _lock = acquire_index_lock(root);
-        let _ = git_ok(root, &["fetch", "origin"]);
-    }
+    // Read-only: compare against the LAST-FETCHED tracking ref, with NO fetch — so
+    // this stays a pure, side-effect-free read safe to call on a GET. An explicit
+    // refresh (fetch_remote) is a separate, mutating POST. Counts may be stale
+    // until the next fetch/pull; `None` means no upstream configured.
     let branch = current_branch(root).ok()?;
     let out = git_ok(root, &["rev-list", "--left-right", "--count", &format!("origin/{branch}...HEAD")]).ok()?;
     let mut it = out.split_whitespace();

@@ -369,7 +369,29 @@ type Analysis = (Vec<yarddog::report::MountReport>, HashMap<String, (u32, u32)>)
 fn analyze(file: &str) -> Result<Analysis, String> {
     let yaml = std::fs::read_to_string(file).map_err(|e| format!("reading {file}: {e}"))?;
     let env: HashMap<String, String> = std::env::vars().collect();
-    let mounts = parse_mounts(&yaml, &env).map_err(|e| format!("parsing {file}: {e:?}"))?;
+    // Resolve relative bind sources against the STACK dir (as docker compose does),
+    // not the process CWD — otherwise `yd inspect`/`yd fix` stat and create dirs in
+    // the wrong place (e.g. the web server's CWD) and misreport / misplace them.
+    let stack_dir = std::path::Path::new(file)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let mounts: Vec<_> = parse_mounts(&yaml, &env)
+        .map_err(|e| format!("parsing {file}: {e:?}"))?
+        .into_iter()
+        .map(|mut m| {
+            if let Some(src) = m.source.as_deref() {
+                if yarddog::classify::is_path_source(src)
+                    && std::path::Path::new(src).is_relative()
+                    && !src.starts_with('~')
+                {
+                    m.source = Some(stack_dir.join(src).to_string_lossy().to_string());
+                }
+            }
+            m
+        })
+        .collect();
 
     let volumes = RealVolumeInspector::new();
     let net = RealNetworkProbe;
@@ -517,6 +539,7 @@ fn run_backup(file: &str, plan: bool, run: bool, dest: Option<&str>) -> Result<(
         // never clobbers the previous good backup and the published dir is always
         // complete (data + manifest).
         let final_dest = std::path::PathBuf::from(dest);
+        gc_backup_temps(&final_dest);
         let tmp = partial_path(&final_dest);
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).map_err(|e| format!("creating {}: {e}", tmp.display()))?;
@@ -545,7 +568,10 @@ fn run_backup(file: &str, plan: bool, run: bool, dest: Option<&str>) -> Result<(
                 return Err(e);
             }
         };
-        publish_backup(&tmp, &final_dest).map_err(|e| format!("publishing backup: {e}"))?;
+        if let Err(e) = publish_backup(&tmp, &final_dest) {
+            let _ = std::fs::remove_dir_all(&tmp);
+            return Err(format!("publishing backup: {e}"));
+        }
         println!("backed up to {dest}: dumps={dumped:?} copies={copied:?} ({n} files manifested)");
     } else if plan {
         print!("{}", yarddog::backup::render_plan(&backup_plan));
@@ -555,10 +581,37 @@ fn run_backup(file: &str, plan: bool, run: bool, dest: Option<&str>) -> Result<(
     Ok(())
 }
 
-/// A hidden temp-sibling path for building a backup before it is published.
+/// Monotonic counter so two backups sharing a pid (two threads in the web server)
+/// still get distinct temp paths.
+static BACKUP_TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A temp-sibling path for building a backup before it is published. Named
+/// `<dest>.partial-<pid>-<seq>` so it (a) is matched by the `.yd-backups.partial-*`
+/// gitignore rule — never committed — and (b) is unique per call.
 fn partial_path(dest: &std::path::Path) -> std::path::PathBuf {
-    let name = dest.file_name().and_then(|n| n.to_str()).unwrap_or("backup");
-    dest.with_file_name(format!(".{name}.partial-{}", std::process::id()))
+    let name = dest.file_name().and_then(|n| n.to_str()).unwrap_or(".yd-backups");
+    let seq = BACKUP_TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    dest.with_file_name(format!("{name}.partial-{}-{seq}", std::process::id()))
+}
+
+/// Remove stale `<dest>.partial-*` / `<dest>.old-*` orphans left by a crash or a
+/// failed swap, so they can't accumulate (or be committed before the ignore rule
+/// took effect).
+fn gc_backup_temps(dest: &std::path::Path) {
+    let (Some(parent), Some(name)) = (dest.parent(), dest.file_name().and_then(|n| n.to_str()))
+    else {
+        return;
+    };
+    let (pre_partial, pre_old) = (format!("{name}.partial-"), format!("{name}.old-"));
+    if let Ok(rd) = std::fs::read_dir(parent) {
+        for e in rd.flatten() {
+            if let Some(n) = e.file_name().to_str() {
+                if n.starts_with(&pre_partial) || n.starts_with(&pre_old) {
+                    let _ = std::fs::remove_dir_all(e.path());
+                }
+            }
+        }
+    }
 }
 
 /// Atomically replace `dest` with the freshly-built `tmp`, keeping the previous
@@ -566,8 +619,9 @@ fn partial_path(dest: &std::path::Path) -> std::path::PathBuf {
 /// operator with no backup).
 fn publish_backup(tmp: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
     if dest.exists() {
-        let name = dest.file_name().and_then(|n| n.to_str()).unwrap_or("backup");
-        let old = dest.with_file_name(format!(".{name}.old-{}", std::process::id()));
+        let name = dest.file_name().and_then(|n| n.to_str()).unwrap_or(".yd-backups");
+        let seq = BACKUP_TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let old = dest.with_file_name(format!("{name}.old-{}-{seq}", std::process::id()));
         let _ = std::fs::remove_dir_all(&old);
         std::fs::rename(dest, &old)?;
         if let Err(e) = std::fs::rename(tmp, dest) {
@@ -738,6 +792,7 @@ impl yarddog::deploy::BackupHook for RealBackupHook {
         let compose_abs = std::fs::canonicalize(&compose).unwrap_or(compose);
         // Build into a temp sibling and publish atomically so a failed pre-change
         // backup can't destroy the previous recovery point.
+        gc_backup_temps(&dest);
         let tmp = partial_path(&dest);
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp)?;
@@ -759,7 +814,10 @@ impl yarddog::deploy::BackupHook for RealBackupHook {
                 return Err(e);
             }
         };
-        publish_backup(&tmp, &dest)?;
+        if let Err(e) = publish_backup(&tmp, &dest) {
+            let _ = std::fs::remove_dir_all(&tmp);
+            return Err(e);
+        }
         println!(
             "pre-change backup -> {}: dumps={:?} copies={:?}",
             dest.display(),

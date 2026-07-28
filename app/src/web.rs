@@ -40,6 +40,21 @@ fn stack_lock(key: &str) -> Arc<Mutex<()>> {
     g.entry(key.to_string()).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
 }
 
+/// Cap on concurrently-handled requests. Loopback single-operator use never needs
+/// many; the cap stops an unbounded thread/subprocess pile-up from parked
+/// long-polls or a drive-by GET loop.
+const MAX_INFLIGHT: usize = 128;
+static INFLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Decrements the in-flight counter when a request's handler thread ends (normal
+/// return, early return, or panic).
+struct InflightGuard;
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        INFLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// The stack a mutation targets (parent dir of its `compose`), for per-stack
 /// locking. Falls back to a single shared bucket when there is no compose field.
 fn stack_key(body: &str) -> String {
@@ -60,7 +75,12 @@ fn normalize_stack_key(compose: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
     for c in parent.components() {
         match c {
-            Component::Normal(s) => parts.push(s.to_string_lossy().to_string()),
+            // Lower-case each component so that on a case-INSENSITIVE filesystem
+            // (the Windows host, macOS, case-insensitive binds) two spellings that
+            // resolve to the SAME stack dir — Immich/ vs immich/ — map to the SAME
+            // lock and actually serialize. On a case-sensitive FS this merely
+            // over-serializes two case-distinct stacks (benign).
+            Component::Normal(s) => parts.push(s.to_string_lossy().to_lowercase()),
             Component::ParentDir => parts.push("..".into()),
             _ => {}
         }
@@ -807,6 +827,12 @@ fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
             Ok(out) => (200, format!("{{\"ok\":true,\"stdout\":{}}}", json_escape(&out))),
             Err(e) => (200, format!("{{\"ok\":false,\"stderr\":{}}}", json_escape(&e.to_string()))),
         },
+        // Explicit remote refresh (the mutating counterpart to the GET /api/git
+        // read, which no longer fetches). A POST so a visited page can't drive it.
+        "/api/git/fetch" => match gitver::fetch_remote(root) {
+            Ok(_) => (200, "{\"ok\":true}".into()),
+            Err(e) => (200, format!("{{\"ok\":false,\"stderr\":{}}}", json_escape(&e.to_string()))),
+        },
         // ---- interactive terminal (PTY) -------------------------------------
         "/api/term/open" => {
             let Some(rel) = field(&v, "compose") else { return bad("compose required") };
@@ -918,7 +944,15 @@ pub fn serve(host: &str, port: u16, root: &Path) -> io::Result<()> {
         // terminal read parks up to 500ms) never stalls the rest of the control
         // plane. A panic in one handler kills only its thread, not the server.
         let root = root.clone();
+        // Backpressure: refuse past the in-flight cap rather than spawn unboundedly.
+        if INFLIGHT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= MAX_INFLIGHT {
+            INFLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = request.respond(Response::from_string("server busy").with_status_code(503));
+            continue;
+        }
+        let guard = InflightGuard;
         std::thread::spawn(move || {
+            let _guard = guard; // decrements the in-flight counter when this thread ends
         // Security: refuse any non-loopback Host (DNS-rebinding defense).
         let host_ok = request
             .headers()

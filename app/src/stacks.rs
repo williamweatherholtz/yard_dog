@@ -30,10 +30,15 @@ pub fn find_compose(dir: &Path) -> Option<PathBuf> {
 /// Discover the stacks under `root` — each subdirectory holding a compose file.
 pub fn discover_stacks(root: &Path) -> io::Result<Vec<Stack>> {
     let mut stacks = Vec::new();
+    // Only a failure to open the root aborts. A single unreadable entry (a
+    // permission error on one subdir) is skipped, not allowed to collapse the
+    // whole listing to empty — otherwise a healthy fleet vanishes from the CLI/UI
+    // because of one bad directory.
     for entry in std::fs::read_dir(root)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
+        let Ok(entry) = entry else { continue };
+        match entry.file_type() {
+            Ok(ft) if ft.is_dir() => {}
+            _ => continue,
         }
         if let Some(compose_path) = find_compose(&entry.path()) {
             stacks.push(Stack {
@@ -104,7 +109,11 @@ pub fn import_stack(compose_path: &Path, stacks_root: &Path, name: Option<&str>)
         if let Ok(yaml) = std::fs::read_to_string(compose_path) {
             for ef in env_file_refs(&yaml) {
                 let rel = Path::new(&ef);
-                if rel.is_relative() {
+                // Only carry a relative env_file that stays WITHIN the stack. A ref
+                // with `..` (or an absolute path) would read an arbitrary host file
+                // into the managed tree, or write/overwrite outside stacks_root —
+                // reject those rather than copy them.
+                if rel.is_relative() && is_confined(rel) {
                     let src = parent.join(rel);
                     if src.is_file() {
                         if let Some(dp) = rel.parent() {
@@ -120,6 +129,13 @@ pub fn import_stack(compose_path: &Path, stacks_root: &Path, name: Option<&str>)
         name: stack_name,
         compose_path: dest_compose,
     })
+}
+
+/// True when a relative path stays within its base — every component is a plain
+/// name or `.` (no `..` traversal, no absolute/drive marker).
+fn is_confined(rel: &Path) -> bool {
+    use std::path::Component;
+    rel.components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
 }
 
 /// Relative `env_file:` targets referenced by any service (string or list form).
