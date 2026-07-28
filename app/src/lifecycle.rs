@@ -90,7 +90,13 @@ pub fn read_state(dir: &Path) -> LifecycleState {
 
 /// Persist `state` for the stack at `dir`.
 pub fn write_state(dir: &Path, state: LifecycleState) -> io::Result<()> {
-    std::fs::write(state_path(dir), state.as_str())
+    // Atomic: write a temp then rename, so a crash mid-write can't truncate the
+    // state file into garbage that read_state would silently treat as Draft
+    // (which would bypass the archived deploy-gate).
+    let path = state_path(dir);
+    let tmp = std::path::PathBuf::from(format!("{}.tmp", path.display()));
+    std::fs::write(&tmp, state.as_str())?;
+    std::fs::rename(&tmp, &path)
 }
 
 /// Apply a guarded transition on disk: read current → transition → persist.

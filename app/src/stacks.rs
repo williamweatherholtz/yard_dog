@@ -49,6 +49,13 @@ pub fn discover_stacks(root: &Path) -> io::Result<Vec<Stack>> {
 /// Import an existing compose file (+ sibling `.env`) into `stacks_root` as a
 /// named stack, without modifying the original. Refuses to overwrite an
 /// existing stack. `name` defaults to the compose file's parent directory name.
+/// A safe stack name: exactly one normal path segment (no `..`, no separators,
+/// no absolute/drive prefix, not empty) — so `root.join(name)` can't escape root.
+pub fn is_plain_name(name: &str) -> bool {
+    let mut comps = Path::new(name).components();
+    matches!(comps.next(), Some(std::path::Component::Normal(_))) && comps.next().is_none()
+}
+
 pub fn import_stack(compose_path: &Path, stacks_root: &Path, name: Option<&str>) -> io::Result<Stack> {
     let stack_name = match name {
         Some(n) => n.to_string(),
@@ -58,6 +65,12 @@ pub fn import_stack(compose_path: &Path, stacks_root: &Path, name: Option<&str>)
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "imported".to_string()),
     };
+    if !is_plain_name(&stack_name) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid stack name '{stack_name}' — must be a single path segment (no '/', '..', or drive)"),
+        ));
+    }
     let dest = stacks_root.join(&stack_name);
     if dest.exists() {
         return Err(io::Error::new(
@@ -77,11 +90,63 @@ pub fn import_stack(compose_path: &Path, stacks_root: &Path, name: Option<&str>)
         if env.is_file() {
             std::fs::copy(&env, dest.join(".env"))?;
         }
+        // Carry companion files a deploy needs: override composes + any relative
+        // env_file targets (otherwise the imported copy silently differs / breaks).
+        for companion in [
+            "docker-compose.override.yml", "compose.override.yml",
+            "docker-compose.override.yaml", "compose.override.yaml",
+        ] {
+            let src = parent.join(companion);
+            if src.is_file() {
+                std::fs::copy(&src, dest.join(companion))?;
+            }
+        }
+        if let Ok(yaml) = std::fs::read_to_string(compose_path) {
+            for ef in env_file_refs(&yaml) {
+                let rel = Path::new(&ef);
+                if rel.is_relative() {
+                    let src = parent.join(rel);
+                    if src.is_file() {
+                        if let Some(dp) = rel.parent() {
+                            std::fs::create_dir_all(dest.join(dp))?;
+                        }
+                        let _ = std::fs::copy(&src, dest.join(rel));
+                    }
+                }
+            }
+        }
     }
     Ok(Stack {
         name: stack_name,
         compose_path: dest_compose,
     })
+}
+
+/// Relative `env_file:` targets referenced by any service (string or list form).
+fn env_file_refs(yaml: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
+        return out;
+    };
+    let Some(services) = doc.get("services").and_then(|v| v.as_mapping()) else {
+        return out;
+    };
+    for (_, svc) in services {
+        match svc.get("env_file") {
+            Some(serde_yaml::Value::String(s)) => out.push(s.clone()),
+            Some(serde_yaml::Value::Sequence(seq)) => {
+                for e in seq {
+                    if let Some(s) = e.as_str() {
+                        out.push(s.to_string());
+                    } else if let Some(p) = e.get("path").and_then(|p| p.as_str()) {
+                        out.push(p.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 #[cfg(test)]

@@ -42,6 +42,10 @@ fn git_ok(dir: &Path, args: &[&str]) -> io::Result<String> {
     cmd.args(["-C", dir_s])
         .args(["-c", &format!("user.name={BOT_NAME}")])
         .args(["-c", &format!("user.email={BOT_EMAIL}")])
+        // Never let a host's global signing requirement or a pre-commit hook block
+        // the bot's snapshot/restore commits.
+        .args(["-c", "commit.gpgsign=false"])
+        .args(["-c", "core.hooksPath="])
         .args(args);
     let out = cmd.output()?;
     if !out.status.success() {
@@ -61,9 +65,33 @@ fn git_ok(dir: &Path, args: &[&str]) -> io::Result<String> {
 pub fn init(dir: &Path) -> io::Result<()> {
     std::fs::create_dir_all(dir)?;
     git_ok(dir, &["init", "-q"])?;
-    std::fs::write(dir.join(".gitignore"), GITIGNORE)?;
-    std::fs::write(dir.join(".gitattributes"), GITATTRIBUTES)?;
+    ensure_ignore(dir)?;
+    // Don't clobber an operator's existing attributes.
+    let attr = dir.join(".gitattributes");
+    if !attr.exists() {
+        std::fs::write(attr, GITATTRIBUTES)?;
+    }
     Ok(())
+}
+
+const IGNORE_MARKER: &str = "# --- Yard Dog managed: never version data or secrets ---";
+
+/// Ensure the opinionated data/secret ignore rules are present, WITHOUT clobbering
+/// an operator's own `.gitignore` — append a marked block once (idempotent). This
+/// runs on adopt of a pre-existing repo too, so their data/secrets aren't committed.
+fn ensure_ignore(dir: &Path) -> io::Result<()> {
+    let path = dir.join(".gitignore");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    if existing.contains(IGNORE_MARKER) {
+        return Ok(());
+    }
+    let block = format!("{IGNORE_MARKER}\n{GITIGNORE}# --- end Yard Dog managed ---\n");
+    let combined = if existing.trim().is_empty() {
+        block
+    } else {
+        format!("{}\n\n{block}", existing.trim_end())
+    };
+    std::fs::write(&path, combined)
 }
 
 /// Ensure `dir` is a versioning repo: initialise it (with the opinionated
@@ -71,7 +99,9 @@ pub fn init(dir: &Path) -> io::Result<()> {
 /// repo — so we never clobber an operator's existing git config.
 pub fn ensure_repo(dir: &Path) -> io::Result<()> {
     if dir.join(".git").exists() {
-        return Ok(());
+        // Existing repo (e.g. an adopted operator repo): don't re-init or touch
+        // their git config, but DO ensure our data/secret ignore block is present.
+        return ensure_ignore(dir);
     }
     init(dir)
 }
@@ -113,11 +143,9 @@ pub fn restore(dir: &Path, sha: &str) -> io::Result<String> {
     // `checkout -- .` reverts tracked content but leaves files added after `sha`
     // in place. A faithful restore must also delete those, so the worktree
     // matches the target commit exactly (else stray config survives a regress).
-    let in_target: std::collections::HashSet<String> = git_ok(dir, &["ls-tree", "-r", "--name-only", sha])?
-        .lines()
-        .map(|l| l.to_string())
-        .collect();
-    let tracked_now: Vec<String> = git_ok(dir, &["ls-files"])?.lines().map(|l| l.to_string()).collect();
+    let in_target: std::collections::HashSet<String> =
+        split_z(&git_ok(dir, &["ls-tree", "-r", "-z", "--name-only", sha])?);
+    let tracked_now = split_z(&git_ok(dir, &["ls-files", "-z"])?);
     for f in tracked_now.iter().filter(|f| !in_target.contains(*f)) {
         git_ok(dir, &["rm", "-f", "--", f])?;
     }
@@ -126,7 +154,7 @@ pub fn restore(dir: &Path, sha: &str) -> io::Result<String> {
     if git_ok(dir, &["status", "--porcelain"])?.trim().is_empty() {
         return Ok(git_ok(dir, &["rev-parse", "HEAD"])?.trim().to_string());
     }
-    let short = &sha[..sha.len().min(12)];
+    let short: String = sha.chars().take(12).collect();
     git_ok(dir, &["commit", "-q", "-m", &format!("restore to {short}")])?;
     Ok(git_ok(dir, &["rev-parse", "HEAD"])?.trim().to_string())
 }
@@ -151,7 +179,9 @@ fn spec(rel: &Path) -> String {
     if s.is_empty() || s == "." {
         ".".to_string()
     } else {
-        s
+        // `:(literal)` disables git's fnmatch, so a stack dir containing `* ? [ ]`
+        // can't glob into sibling stacks or match nothing.
+        format!(":(literal){s}")
     }
 }
 
@@ -208,14 +238,18 @@ pub fn diff_scoped(root: &Path, rel: &Path, from: &str, to: Option<&str>) -> io:
 /// under `rel` after `sha`), recorded as a new commit. Returns the new sha.
 pub fn restore_scoped(root: &Path, rel: &Path, sha: &str) -> io::Result<String> {
     let sp = spec(rel);
-    git_ok(root, &["checkout", sha, "--", &sp])?;
+    // What existed under `rel` at the target sha (NUL-terminated so non-ASCII /
+    // special filenames aren't quote-mangled). Empty ⇒ the stack didn't exist at
+    // sha (added/renamed since) — then we skip checkout and just clear it.
+    let in_target: std::collections::HashSet<String> = split_z(&git_ok(
+        root,
+        &["ls-tree", "-r", "-z", "--name-only", sha, "--", &sp],
+    )?);
+    if !in_target.is_empty() {
+        git_ok(root, &["checkout", sha, "--", &sp])?;
+    }
     // Remove files under `rel` that are not present at `sha` (scoped stray-removal).
-    let in_target: std::collections::HashSet<String> =
-        git_ok(root, &["ls-tree", "-r", "--name-only", sha, "--", &sp])?
-            .lines()
-            .map(|l| l.to_string())
-            .collect();
-    let now: Vec<String> = git_ok(root, &["ls-files", "--", &sp])?.lines().map(|l| l.to_string()).collect();
+    let now = split_z(&git_ok(root, &["ls-files", "-z", "--", &sp])?);
     for f in now.iter().filter(|f| !in_target.contains(*f)) {
         git_ok(root, &["rm", "-f", "--", f])?;
     }
@@ -223,9 +257,14 @@ pub fn restore_scoped(root: &Path, rel: &Path, sha: &str) -> io::Result<String> 
     if git_ok(root, &["status", "--porcelain", "--", &sp])?.trim().is_empty() {
         return head(root);
     }
-    let short = &sha[..sha.len().min(12)];
+    let short: String = sha.chars().take(12).collect();
     git_ok(root, &["commit", "-q", "-m", &format!("restore to {short}"), "--", &sp])?;
     head(root)
+}
+
+/// Split NUL-terminated git output (from `-z`) into a set of raw paths.
+fn split_z(s: &str) -> std::collections::HashSet<String> {
+    s.split('\0').filter(|p| !p.is_empty()).map(|p| p.to_string()).collect()
 }
 
 // ---- remote sync (needRemoteConfigSync) -------------------------------------

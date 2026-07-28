@@ -16,6 +16,9 @@ pub struct ServiceView {
 /// Extract a [`ServiceView`] per service from a compose document.
 pub fn parse_services(yaml: &str) -> Vec<ServiceView> {
     let mut out = Vec::new();
+    if crate::compose::yaml_guard(yaml).is_err() {
+        return out;
+    }
     let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
         return out;
     };

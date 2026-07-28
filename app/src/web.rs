@@ -945,7 +945,20 @@ pub fn serve(host: &str, port: u16, root: &Path) -> io::Result<()> {
                     json_response(415, "{\"error\":\"mutations require application/json from a loopback origin\"}".into())
                 } else {
                     let mut body = String::new();
-                    let _ = request.as_reader().read_to_string(&mut body);
+                    // Cap the body so a local client can't OOM the server (or, via
+                    // /api/save, write an unbounded file) with a giant POST.
+                    const MAX_BODY: usize = 8 * 1024 * 1024;
+                    let reader = request.as_reader();
+                    let mut bytes = Vec::new();
+                    let mut chunk = [0u8; 8192];
+                    while bytes.len() < MAX_BODY {
+                        match reader.read(&mut chunk) {
+                            Ok(0) => break,
+                            Ok(n) => bytes.extend_from_slice(&chunk[..n]),
+                            Err(_) => break,
+                        }
+                    }
+                    body = String::from_utf8_lossy(&bytes).into_owned();
                     // Serialize MUTATING git/stack actions behind one global lock —
                     // the monorepo shares a single .git/index, and the old
                     // sequential loop was the de-facto serializer that

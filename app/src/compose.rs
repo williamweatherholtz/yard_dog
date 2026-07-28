@@ -24,10 +24,42 @@ pub enum ComposeError {
 }
 
 /// Extract every service mount from a compose document, interpolating `${VAR}`.
+/// Reject pathological YAML BEFORE handing it to serde_yaml, which recurses with
+/// no depth limit — a small flow-style `[[[…]]]` bomb overflows the stack and
+/// SIGABRTs the whole process (crashing the server, not just one request thread),
+/// and an oversized/alias-bomb input can OOM. Returns Err with a reason if unsafe.
+pub fn yaml_guard(s: &str) -> Result<(), &'static str> {
+    const MAX_LEN: usize = 2 * 1024 * 1024; // 2 MiB is plenty for a compose file
+    const MAX_DEPTH: i32 = 100;
+    if s.len() > MAX_LEN {
+        return Err("compose file too large (>2 MiB)");
+    }
+    let (mut depth, mut max, mut sq, mut dq) = (0i32, 0i32, false, false);
+    for ch in s.chars() {
+        match ch {
+            '\'' if !dq => sq = !sq,
+            '"' if !sq => dq = !dq,
+            '[' | '{' if !sq && !dq => {
+                depth += 1;
+                if depth > max {
+                    max = depth;
+                }
+            }
+            ']' | '}' if !sq && !dq => depth -= 1,
+            _ => {}
+        }
+    }
+    if max > MAX_DEPTH {
+        return Err("compose nesting too deep");
+    }
+    Ok(())
+}
+
 pub fn parse_mounts(
     yaml: &str,
     env: &HashMap<String, String>,
 ) -> Result<Vec<RawMount>, ComposeError> {
+    yaml_guard(yaml).map_err(|e| ComposeError::Yaml(e.to_string()))?;
     let doc: serde_yaml::Value =
         serde_yaml::from_str(yaml).map_err(|e| ComposeError::Yaml(e.to_string()))?;
 
@@ -163,6 +195,9 @@ fn interpolate(input: &str, env: &HashMap<String, String>) -> String {
 /// Map each service name to its `image` string (if declared).
 pub fn parse_service_images(yaml: &str) -> HashMap<String, String> {
     let mut out = HashMap::new();
+    if yaml_guard(yaml).is_err() {
+        return out;
+    }
     let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
         return out;
     };
@@ -187,6 +222,9 @@ pub fn parse_service_ids(
     env: &HashMap<String, String>,
 ) -> HashMap<String, (Option<u32>, Option<u32>)> {
     let mut out = HashMap::new();
+    if yaml_guard(yaml).is_err() {
+        return out;
+    }
     let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
         return out;
     };

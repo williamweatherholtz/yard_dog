@@ -76,6 +76,16 @@ fn service_env(svc: &serde_yaml::Value) -> Vec<(String, String)> {
 /// Run the guardrail ruleset over a compose document.
 pub fn run_guardrails(yaml: &str) -> Vec<Finding> {
     let mut out = Vec::new();
+    // Refuse pathological YAML (stack-overflow / OOM bomb) with a Block, before
+    // serde_yaml recurses — so a crafted compose is stopped, not crashed on.
+    if let Err(e) = crate::compose::yaml_guard(yaml) {
+        return vec![Finding {
+            service: "compose".into(),
+            rule: "pathological-yaml".into(),
+            severity: Severity::Block,
+            message: e.to_string(),
+        }];
+    }
     let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
         return out;
     };
@@ -132,16 +142,29 @@ pub fn run_guardrails(yaml: &str) -> Vec<Finding> {
         if is_truthy(svc.get("privileged")) {
             out.push(block("privileged", "runs privileged (full host device/root access)".into()));
         }
-        // Host-root-equivalent mounts: the Docker socket, or a sensitive host path
-        // (short OR long volume syntax).
-        for src in volume_sources(svc) {
+        // Host mounts. Severity depends on WHAT and whether it's writable — a
+        // read-write bind of a host-system path is host-root-equivalent (Block);
+        // a read-only bind is worth flagging (Warn) but is a legitimate pattern
+        // (timezone, CA certs, monitoring); a small allowlist of ubiquitous safe
+        // read-only leaves is silent so common composes aren't nagged.
+        for (src, read_only) in volume_mounts(svc) {
             if src.ends_with("docker.sock") {
                 out.push(block("docker-socket", "mounts the Docker socket (equivalent to host root)".into()));
+            } else if src == "/" {
+                out.push(block("host-root-mount", "mounts the entire host filesystem at /".into()));
             } else if is_sensitive_host_path(&src) {
-                out.push(block("host-path-mount", format!("mounts a sensitive host path {src} (host-root-equivalent)")));
+                if read_only && SAFE_RO_LEAVES.iter().any(|l| src == *l) {
+                    // ubiquitous + safe (e.g. /etc/localtime:ro) — no finding
+                } else if read_only {
+                    out.push(warn(&service, "host-path-ro", format!("mounts host system path {src} read-only")));
+                } else {
+                    out.push(block("host-path-mount", format!("mounts writable host system path {src} (host-root-equivalent)")));
+                }
             }
         }
-        // Raw host device passthrough (e.g. /dev/mem, /dev/sda) = host takeover.
+        // Host device passthrough: raw memory/disk/kernel devices are host takeover
+        // (Block); ordinary passthrough (GPU transcode, serial/Zigbee, USB, tun) is
+        // powerful but a legitimate homelab pattern (Warn), not a deploy-stop.
         if let Some(devs) = svc.get("devices").and_then(|v| v.as_sequence()) {
             for d in devs {
                 let s = match d {
@@ -149,8 +172,13 @@ pub fn run_guardrails(yaml: &str) -> Vec<Finding> {
                     serde_yaml::Value::Mapping(m) => m.get("source").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
                     _ => String::new(),
                 };
-                if !s.is_empty() {
-                    out.push(block("host-device", format!("passes through host device {s}")));
+                if s.is_empty() {
+                    continue;
+                }
+                if is_dangerous_device(&s) {
+                    out.push(block("host-device", format!("passes through a raw host device {s} (host takeover)")));
+                } else {
+                    out.push(warn(&service, "host-device", format!("passes through host device {s}")));
                 }
             }
         }
@@ -208,16 +236,29 @@ fn is_truthy(v: Option<&serde_yaml::Value>) -> bool {
     }
 }
 
-/// Source paths of a service's `volumes:` (short `SRC:DST` and long `source:`).
-fn volume_sources(svc: &serde_yaml::Value) -> Vec<String> {
+/// Ubiquitous, safe read-only host binds — no finding even though they touch a
+/// system path (timezone, machine id, CA trust, DNS).
+const SAFE_RO_LEAVES: &[&str] = &[
+    "/etc/localtime", "/etc/timezone", "/etc/machine-id", "/etc/ssl/certs",
+    "/etc/ca-certificates", "/usr/share/zoneinfo", "/etc/hosts", "/etc/resolv.conf",
+];
+
+/// `(source, read_only)` for each of a service's `volumes:` (short + long syntax).
+fn volume_mounts(svc: &serde_yaml::Value) -> Vec<(String, bool)> {
     let mut out = Vec::new();
     if let Some(vols) = svc.get("volumes").and_then(|v| v.as_sequence()) {
         for vol in vols {
             match vol {
-                serde_yaml::Value::String(s) => out.push(s.split(':').next().unwrap_or("").to_string()),
+                serde_yaml::Value::String(s) => {
+                    let parts: Vec<&str> = s.split(':').collect();
+                    let src = parts.first().copied().unwrap_or("").to_string();
+                    let ro = parts.len() >= 3 && parts[parts.len() - 1].split(',').any(|m| m.trim() == "ro");
+                    out.push((src, ro));
+                }
                 serde_yaml::Value::Mapping(m) => {
                     if let Some(src) = m.get("source").and_then(|x| x.as_str()) {
-                        out.push(src.to_string());
+                        let ro = m.get("read_only").and_then(|x| x.as_bool()).unwrap_or(false);
+                        out.push((src.to_string(), ro));
                     }
                 }
                 _ => {}
@@ -225,6 +266,23 @@ fn volume_sources(svc: &serde_yaml::Value) -> Vec<String> {
         }
     }
     out
+}
+
+/// A raw host device whose passthrough is host-takeover-equivalent (memory,
+/// kernel log, I/O ports, or a whole block device). Ordinary device passthrough
+/// (GPU, sound, serial, USB, tun) is NOT in here — it only warns.
+fn is_dangerous_device(src: &str) -> bool {
+    let s = src.replace('\\', "/");
+    if matches!(s.as_str(), "/dev/mem" | "/dev/kmem" | "/dev/port" | "/dev/kmsg" | "/dev") {
+        return true;
+    }
+    // whole-disk block devices: /dev/sda, /dev/nvme0n1, /dev/vda, /dev/hda,
+    // /dev/mmcblk0, /dev/dm-0, /dev/loop0 (partitions like sda1 too).
+    let leaf = s.strip_prefix("/dev/").unwrap_or("");
+    let disk_prefixes = ["sd", "vd", "hd", "nvme", "mmcblk", "dm-", "loop", "xvd"];
+    disk_prefixes
+        .iter()
+        .any(|p| leaf.starts_with(p) && leaf[p.len()..].chars().next().map(|c| c.is_ascii_alphanumeric()).unwrap_or(false))
 }
 
 /// `cap_add` as a list, tolerating both a sequence and a single scalar string.
@@ -305,13 +363,15 @@ mod tests {
     fn security_lens_catches_evasion_variants() {
         // privileged as a quoted string (as_bool would miss it)
         assert!(!verdict(&run_guardrails("services:\n  a:\n    image: nginx:1.27\n    privileged: \"true\"\n")), "privileged string");
-        // sensitive host-root binds (not the literal socket)
+        // whole host filesystem + writable host-system binds still Block
         let f = run_guardrails("services:\n  a:\n    image: nginx:1.27\n    volumes:\n      - /:/host\n");
-        assert!(rules(&f).contains(&"host-path-mount") && !verdict(&f), "root mount blocked: {f:?}");
-        assert!(!verdict(&run_guardrails("services:\n  a:\n    image: nginx:1.27\n    volumes:\n      - /var/run:/hr\n")), "/var/run bind blocked");
-        // raw host device passthrough
+        assert!(rules(&f).contains(&"host-root-mount") && !verdict(&f), "root mount blocked: {f:?}");
+        assert!(!verdict(&run_guardrails("services:\n  a:\n    image: nginx:1.27\n    volumes:\n      - /var/run:/hr\n")), "writable /var/run bind blocked");
+        assert!(!verdict(&run_guardrails("services:\n  a:\n    image: nginx:1.27\n    volumes:\n      - /etc:/hostetc\n")), "writable /etc bind blocked");
+        // raw memory/disk devices Block
         let f = run_guardrails("services:\n  a:\n    image: nginx:1.27\n    devices:\n      - /dev/mem:/dev/mem\n");
-        assert!(rules(&f).contains(&"host-device") && !verdict(&f), "device passthrough blocked: {f:?}");
+        assert!(rules(&f).contains(&"host-device") && !verdict(&f), "raw device blocked: {f:?}");
+        assert!(!verdict(&run_guardrails("services:\n  a:\n    image: nginx:1.27\n    devices:\n      - /dev/sda:/dev/sda\n")), "whole disk blocked");
         // security_opt unconfined
         assert!(!verdict(&run_guardrails("services:\n  a:\n    image: nginx:1.27\n    security_opt:\n      - seccomp:unconfined\n")), "seccomp unconfined blocked");
         // host-escape caps now Block (were Warn / absent)
@@ -323,6 +383,27 @@ mod tests {
         assert!(!verdict(&run_guardrails("services:\n  a:\n    image: nginx:1.27\n    cap_add: SYS_ADMIN\n")), "scalar cap_add blocked");
         // ordinary relative/named data binds are NOT sensitive host paths
         assert!(verdict(&run_guardrails("services:\n  a:\n    image: nginx:1.27\n    restart: unless-stopped\n    mem_limit: 128m\n    healthcheck:\n      test: [\"CMD\",\"true\"]\n    volumes:\n      - ./data:/data\n      - db-data:/var/lib/x\n")), "ordinary data binds pass");
+    }
+
+    #[test]
+    fn common_safe_host_mounts_and_devices_do_not_block() {
+        // These are ubiquitous, legitimate self-host patterns; a hard Block here
+        // would refuse to deploy real stacks (the regression this fixes).
+        let cases = [
+            "volumes:\n      - /etc/localtime:/etc/localtime:ro\n",
+            "volumes:\n      - /etc/timezone:/etc/timezone:ro\n",
+            "volumes:\n      - /sys/fs/cgroup:/sys/fs/cgroup:ro\n", // cAdvisor
+            "volumes:\n      - /proc:/host/proc:ro\n",            // node-exporter
+            "devices:\n      - /dev/dri:/dev/dri\n",              // GPU transcode
+            "devices:\n      - /dev/ttyUSB0:/dev/ttyUSB0\n",      // Zigbee/HA
+        ];
+        for c in cases {
+            let y = format!("services:\n  a:\n    image: nginx:1.27\n    {c}");
+            assert!(verdict(&run_guardrails(&y)), "must NOT block a common safe pattern:\n{y}\n{:?}", run_guardrails(&y));
+        }
+        // a read-only system bind that ISN'T on the allowlist warns (not blocks)
+        let f = run_guardrails("services:\n  a:\n    image: nginx:1.27\n    volumes:\n      - /sys:/host/sys:ro\n");
+        assert!(verdict(&f) && rules(&f).contains(&"host-path-ro"), "ro system bind warns, not blocks: {f:?}");
     }
 
     #[test]

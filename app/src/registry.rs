@@ -98,18 +98,68 @@ application/vnd.docker.distribution.manifest.v2+json";
 /// A [`RegistryClient`] that fetches remote digests over HTTPS (public images).
 pub struct HttpRegistryClient;
 
+/// An agent with connect + read timeouts, so a slow/hostile registry can't hang
+/// a request-serving thread indefinitely.
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+}
+
+/// Reject registry hosts that resolve to loopback/private/link-local space, so a
+/// crafted `image:` (e.g. `169.254.169.254/x` or `localhost:9000/x`) can't turn
+/// the update check into an SSRF against internal services / cloud metadata.
+pub fn host_is_public(host: &str) -> bool {
+    let hostname = if host.starts_with('[') {
+        host.trim_start_matches('[').split(']').next().unwrap_or(host)
+    } else if let Some((h, p)) = host.rsplit_once(':') {
+        if !h.is_empty() && p.chars().all(|c| c.is_ascii_digit()) { h } else { host }
+    } else {
+        host
+    };
+    let lower = hostname.to_ascii_lowercase();
+    if lower == "localhost" || lower.ends_with(".localhost") {
+        return false;
+    }
+    if let Ok(ip) = hostname.parse::<std::net::IpAddr>() {
+        if ip.is_loopback() || ip.is_unspecified() {
+            return false;
+        }
+        match ip {
+            std::net::IpAddr::V4(v4) => {
+                if v4.is_private() || v4.is_link_local() {
+                    return false; // 10/8, 172.16/12, 192.168/16, 169.254/16
+                }
+            }
+            std::net::IpAddr::V6(v6) => {
+                let seg0 = v6.segments()[0];
+                if (seg0 & 0xfe00) == 0xfc00 || (seg0 & 0xffc0) == 0xfe80 {
+                    return false; // ULA fc00::/7, link-local fe80::/10
+                }
+            }
+        }
+    }
+    true
+}
+
 impl HttpRegistryClient {
     fn fetch_digest(image: &str) -> Option<String> {
         let r = parse_image_ref(image)?;
+        if !host_is_public(&r.api_host) {
+            return None; // SSRF guard — never dial internal/loopback registries
+        }
+        let ag = agent();
         // Anonymous pull token.
-        let body = ureq::get(&r.token_url).call().ok()?.into_string().ok()?;
+        let body = ag.get(&r.token_url).call().ok()?.into_string().ok()?;
         let token = serde_json::from_str::<serde_json::Value>(&body)
             .ok()?
             .get("token")
             .and_then(|t| t.as_str())
             .map(|s| s.to_string())?;
         // The digest is returned in a header; a HEAD is enough.
-        let resp = ureq::head(&r.manifest_url())
+        let resp = ag
+            .head(&r.manifest_url())
             .set("Authorization", &format!("Bearer {token}"))
             .set("Accept", MANIFEST_ACCEPT)
             .call()

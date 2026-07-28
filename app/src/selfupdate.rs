@@ -22,26 +22,35 @@ pub trait ReleaseSource {
     fn latest_version(&self) -> Option<String>;
 }
 
-fn parse_semver(v: &str) -> Option<(u32, u32, u32)> {
+/// Parse `major.minor.patch` plus an optional prerelease tag (build metadata
+/// after `+` is ignored). A prerelease is retained so `1.0.0-rc1 < 1.0.0`.
+fn parse_semver(v: &str) -> Option<(u32, u32, u32, Option<String>)> {
     let v = v.trim().trim_start_matches('v');
-    let mut it = v.split('.');
+    let (core, pre) = match v.split_once('-') {
+        Some((c, rest)) => (c, Some(rest.split('+').next().unwrap_or(rest).to_string())),
+        None => (v.split('+').next().unwrap_or(v), None),
+    };
+    let mut it = core.split('.');
     let major = it.next()?.parse().ok()?;
     let minor = it.next().unwrap_or("0").parse().ok()?;
-    let patch = it
-        .next()
-        .unwrap_or("0")
-        .split(['-', '+'])
-        .next()
-        .unwrap_or("0")
-        .parse()
-        .ok()?;
-    Some((major, minor, patch))
+    let patch = it.next().unwrap_or("0").parse().ok()?;
+    Some((major, minor, patch, pre))
 }
 
-/// True when `latest` is a strictly newer semantic version than `current`.
+/// True when `latest` is a strictly newer semantic version than `current`,
+/// honoring prerelease precedence (a release outranks its own prereleases).
 pub fn version_is_newer(current: &str, latest: &str) -> bool {
     match (parse_semver(current), parse_semver(latest)) {
-        (Some(c), Some(l)) => l > c,
+        (Some((cm, cn, cp, cpre)), Some((lm, ln, lp, lpre))) => {
+            if (lm, ln, lp) != (cm, cn, cp) {
+                return (lm, ln, lp) > (cm, cn, cp);
+            }
+            match (cpre, lpre) {
+                (Some(_), None) => true,    // release supersedes the matching prerelease
+                (None, _) => false,         // already on the release (or a prerelease of it)
+                (Some(c), Some(l)) => l > c, // both prerelease → lexical
+            }
+        }
         _ => false,
     }
 }
@@ -155,13 +164,27 @@ pub fn apply_update(current_exe: &Path, new_bytes: &[u8]) -> io::Result<PathBuf>
     }
     let backup = current_exe.with_extension("old");
     let _ = std::fs::remove_file(&backup);
-    std::fs::rename(current_exe, &backup)?;
-    if let Err(e) = std::fs::rename(&tmp, current_exe) {
-        // best-effort restore if the swap-in failed
-        let _ = std::fs::rename(&backup, current_exe);
-        return Err(e);
+    #[cfg(unix)]
+    {
+        // On Unix a running exe can be replaced by an atomic rename over it — no
+        // window where the executable is missing. Keep a rollback copy first.
+        std::fs::copy(current_exe, &backup)?;
+        if let Err(e) = std::fs::rename(&tmp, current_exe) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        Ok(backup)
     }
-    Ok(backup)
+    #[cfg(not(unix))]
+    {
+        // Windows can't overwrite a running exe in place; move it aside then in.
+        std::fs::rename(current_exe, &backup)?;
+        if let Err(e) = std::fs::rename(&tmp, current_exe) {
+            let _ = std::fs::rename(&backup, current_exe); // best-effort restore
+            return Err(e);
+        }
+        Ok(backup)
+    }
 }
 
 /// A GitHub-releases-backed source (public repo, anonymous). Thin `ureq` adapter.
@@ -184,9 +207,14 @@ impl GithubReleases {
     }
     pub fn download(&self, url: &str) -> Option<Vec<u8>> {
         use std::io::Read;
-        let resp = ureq::get(url).set("User-Agent", "yard-dog-selfupdate").call().ok()?;
+        const MAX: u64 = 512 * 1024 * 1024; // cap so a hostile server can't OOM us
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(180))
+            .build();
+        let resp = agent.get(url).set("User-Agent", "yard-dog-selfupdate").call().ok()?;
         let mut buf = Vec::new();
-        resp.into_reader().read_to_end(&mut buf).ok()?;
+        resp.into_reader().take(MAX).read_to_end(&mut buf).ok()?;
         Some(buf)
     }
 }

@@ -31,6 +31,12 @@ pub fn scaffold(service: &str) -> String {
 /// Create a new stack directory `root/name`, write the starter compose, and set
 /// its lifecycle to Draft. Returns the compose path.
 pub fn instantiate(root: &Path, name: &str, service: &str) -> io::Result<PathBuf> {
+    if !crate::stacks::is_plain_name(name) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid stack name '{name}' — must be a single path segment"),
+        ));
+    }
     let stack_dir = root.join(name);
     std::fs::create_dir_all(&stack_dir)?;
     let compose = stack_dir.join("docker-compose.yml");

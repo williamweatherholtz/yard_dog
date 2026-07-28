@@ -66,21 +66,44 @@ pub fn parse_compose_ps(output: &str) -> HashMap<String, String> {
         }
     };
     let trimmed = output.trim();
-    if let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        for it in &items {
-            insert(it);
-        }
-    } else {
-        for line in trimmed.lines() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                insert(&v);
+    match serde_json::from_str::<serde_json::Value>(trimmed) {
+        // a JSON array of objects
+        Ok(serde_json::Value::Array(items)) => items.iter().for_each(&mut insert),
+        // a single (possibly pretty-printed, multi-line) object
+        Ok(v @ serde_json::Value::Object(_)) => insert(&v),
+        // otherwise newline-delimited JSON objects
+        _ => {
+            for line in trimmed.lines() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                    insert(&v);
+                }
             }
         }
     }
     map
+}
+
+/// Canonicalize an image ref for comparison: drop a default `docker.io[/library]/`
+/// prefix and make an implicit `:latest` explicit, so declared vs running don't
+/// falsely differ on registry qualification or an omitted tag.
+pub fn normalize_image(img: &str) -> String {
+    let s = if let Some(r) = img.strip_prefix("docker.io/") {
+        r.strip_prefix("library/").unwrap_or(r)
+    } else {
+        img
+    };
+    if s.contains('@') {
+        return s.to_string(); // digest-pinned — compare verbatim
+    }
+    let last = s.rsplit('/').next().unwrap_or(s);
+    if last.contains(':') {
+        s.to_string()
+    } else {
+        format!("{s}:latest")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,7 +139,7 @@ pub fn detect_drift(
                 service: service.clone(),
                 kind: DriftKind::Missing,
             }),
-            Some(running_image) if running_image != declared_image => out.push(DriftItem {
+            Some(running_image) if normalize_image(running_image) != normalize_image(declared_image) => out.push(DriftItem {
                 service: service.clone(),
                 kind: DriftKind::ImageChanged {
                     declared: declared_image.clone(),
