@@ -723,7 +723,20 @@ fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
                 gitver::snapshot_scoped(root, &sr, "yd ui edit")
             })();
             match result {
-                Ok(sha) => (200, format!("{{\"ok\":true,\"sha\":{}}}", json_escape(&sha))),
+                Ok(sha) => {
+                    // A plaintext / URL-embedded secret is BLOCKED at deploy but would
+                    // otherwise be committed to git (and pushable to a remote) silently.
+                    // Warn on save so the operator knows before it lands in history.
+                    let secret = guardrails::run_guardrails(yaml).into_iter().any(|f| {
+                        matches!(f.rule.as_str(), "plaintext-secret" | "embedded-credentials")
+                    });
+                    let warn = if secret {
+                        ",\"warning\":\"This compose contains a plaintext secret — it is now committed to git history and would be pushed to any remote. Use an env_file or Docker secret instead.\""
+                    } else {
+                        ""
+                    };
+                    (200, format!("{{\"ok\":true,\"sha\":{}{}}}", json_escape(&sha), warn))
+                }
                 Err(e) => (200, format!("{{\"ok\":false,\"error\":{}}}", json_escape(&e.to_string()))),
             }
         }

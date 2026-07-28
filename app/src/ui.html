@@ -405,7 +405,9 @@ async function validateEditor(){const ed=$("#editor"),p=$("#vpanel");if(!ed||!p)
 async function saveCompose(deploy){logLine("cmd","▶ save"+(deploy?" & deploy":""));
   const {data}=await post("/api/save",{compose:current,yaml:$("#editor").value});
   if(!data.ok){logLine("bad","✗ "+(data.error||"save failed"));toast("bad","Save failed");return;}
-  drafts[current]=$("#editor").value;logLine("ok","✓ saved (snapshot "+((data.sha||"").slice(0,8))+")");toast("ok","Saved");
+  drafts[current]=$("#editor").value;logLine("ok","✓ saved (snapshot "+((data.sha||"").slice(0,8))+")");
+  if(data.warning){logLine("warn","⚠ "+data.warning);toast("warn","Saved — plaintext secret committed");}
+  else toast("ok","Saved");
   if(deploy)await doAct("/api/deploy",{compose:current},"deploy");loadStacks();}
 
 // ---- Mounts: connections + directory intelligence (typing, existence, mitigation) ----
@@ -485,7 +487,7 @@ async function renderBackups(){const b=$("#tabbody");
   const tbl=el("table");const hr=el("tr");["Recovery point","Files","Integrity",""].forEach(h=>hr.append(el("th",null,h)));tbl.append(hr);
   for(const it of items){const tr=el("tr");tr.append(el("td","m",it.name));tr.append(el("td",null,String(it.entries)));
     const v=el("td");if(it.ok){const c=chip("ok","integrity ✓");c.title="Contents match the recorded manifest (integrity). This does NOT prove a point-in-time-consistent snapshot — a live copy can be torn.";v.append(c);}else{v.append(chip("bad",it.issues+" issue"+(it.issues===1?"":"s")));}tr.append(v);
-    const ac=el("td");const rb=el("button","btn danger sm","Restore…");rb.onclick=()=>confirmAct("Restore data from “"+it.name+"”? This OVERWRITES the stack's current bind data (the backup is verified first).","/api/backup/restore",{compose:current,name:it.name},"restore data",true);ac.append(rb);tr.append(ac);
+    const ac=el("td");const rb=el("button","btn danger sm","Restore…");rb.onclick=()=>confirmAct("Restore data from “"+it.name+"”? This OVERWRITES the stack's current bind data (the backup is verified first). Stop the stack first so a running container can't see a torn write.","/api/backup/restore",{compose:current,name:it.name},"restore data",true);ac.append(rb);tr.append(ac);
     tbl.append(tr);}
   b.append(tbl);}
 

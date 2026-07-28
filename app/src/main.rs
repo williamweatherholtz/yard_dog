@@ -521,9 +521,10 @@ fn run_backup(file: &str, plan: bool, run: bool, dest: Option<&str>) -> Result<(
     // backup works regardless of where `yd` is invoked from (e.g. via the UI).
     let compose = std::fs::canonicalize(file).unwrap_or_else(|_| std::path::PathBuf::from(file));
     let yaml = std::fs::read_to_string(&compose).map_err(|e| format!("reading {file}: {e}"))?;
-    if let Some(stack_dir) = compose.parent() {
-        std::env::set_current_dir(stack_dir).map_err(|e| format!("entering stack dir: {e}"))?;
-    }
+    // Resolve relative bind sources + a relative --dest against the stack dir via
+    // explicit joins (RealArchiver carries stack_dir), NOT by mutating the process
+    // CWD — global CWD mutation is fragile and leaks state across calls.
+    let stack_dir = compose.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."));
     let env: HashMap<String, String> = std::env::vars().collect();
     let volumes = RealVolumeInspector::new();
     let net = RealNetworkProbe;
@@ -540,7 +541,9 @@ fn run_backup(file: &str, plan: bool, run: bool, dest: Option<&str>) -> Result<(
         // Build into a temp sibling and swap in only on success, so a failed run
         // never clobbers the previous good backup and the published dir is always
         // complete (data + manifest).
-        let final_dest = std::path::PathBuf::from(dest);
+        // Resolve a relative --dest against the stack dir (not the process CWD).
+        let dest_path = std::path::Path::new(dest);
+        let final_dest = if dest_path.is_relative() { stack_dir.join(dest_path) } else { dest_path.to_path_buf() };
         gc_backup_temps(&final_dest);
         let tmp = partial_path(&final_dest);
         let _ = std::fs::remove_dir_all(&tmp);
@@ -552,7 +555,7 @@ fn run_backup(file: &str, plan: bool, run: bool, dest: Option<&str>) -> Result<(
                 &tmp_str,
                 true,
                 &RealRunner { compose: Some(compose.clone()) },
-                &RealArchiver,
+                &RealArchiver { stack_dir: stack_dir.clone() },
             )
             .map_err(|e| format!("backup failed: {e}"))?;
             let integrity = yarddog::verify::build_manifest(&tmp)
@@ -677,6 +680,12 @@ fn run_deploy(file: &str, yes: bool, wait_timeout: Option<u64>) -> Result<(), St
             );
         }
     }
+    if matches!(outcome, yarddog::deploy::DeployOutcome::RolledBack) {
+        println!(
+            "note: rolled back the CONFIG to the last-good snapshot — bind/volume DATA is \
+             NOT reverted. If the failed change modified data, restore a backup (yd restore)."
+        );
+    }
     if matches!(outcome, yarddog::deploy::DeployOutcome::BackupFailed(_)) {
         std::process::exit(2);
     }
@@ -724,6 +733,13 @@ fn run_upgrade(
                 health_unverified.join(", ")
             );
         }
+    }
+    if matches!(outcome, yarddog::upgrade::UpgradeOutcome::Regressed(_)) {
+        println!(
+            "note: rolled back the CONFIG to the last-good snapshot — bind/volume DATA is \
+             NOT reverted (e.g. a DB schema migration the failed upgrade already ran). If the \
+             change modified data, restore a backup (yd restore)."
+        );
     }
     // A failed pre-change backup means no recovery point was taken — mirror deploy
     // (exit 2), not a silent success.
@@ -792,6 +808,10 @@ impl yarddog::deploy::BackupHook for RealBackupHook {
         let volumes = RealVolumeInspector::new();
         let net = RealNetworkProbe;
         let compose_abs = std::fs::canonicalize(&compose).unwrap_or(compose);
+        eprintln!(
+            "note: pre-change backup copies run against the LIVE stack — not point-in-time \
+             consistent. It is a best-effort recovery point, not a guaranteed-consistent snapshot."
+        );
         // Build into a temp sibling and publish atomically so a failed pre-change
         // backup can't destroy the previous recovery point.
         gc_backup_temps(&dest);
@@ -807,7 +827,7 @@ impl yarddog::deploy::BackupHook for RealBackupHook {
             &volumes,
             &net,
             &RealRunner { compose: Some(compose_abs) },
-            &RealArchiver,
+            &RealArchiver { stack_dir: stack_dir.to_path_buf() },
         );
         let manifest = match built {
             Ok(m) => m,
@@ -1037,7 +1057,7 @@ fn run_restore(file: &str, from: &str, yes: bool) -> Result<(), String> {
             std::process::exit(3);
         }
         yarddog::backup::RestoreOutcome::Skipped => {
-            println!("dry run — pass --yes to restore (this OVERWRITES current data)");
+            println!("dry run — pass --yes to restore (this OVERWRITES current bind data; stop the stack first so a running container can't see a torn write)");
         }
     }
     Ok(())
@@ -1238,15 +1258,26 @@ impl yarddog::backup::CommandRunner for RealRunner {
 
 /// Real archiver: copies bind/network host paths into the destination. Named
 /// volume archiving (needs Docker) lands in a later increment.
-struct RealArchiver;
+struct RealArchiver {
+    stack_dir: std::path::PathBuf,
+}
 impl yarddog::backup::Archiver for RealArchiver {
     fn archive(&self, target: &yarddog::backup::BackupTarget, dest_dir: &str) -> std::io::Result<()> {
         use yarddog::backup::TargetKind;
         match target.kind {
             TargetKind::Bind | TargetKind::Network => {
-                let src = std::path::Path::new(&target.name);
-                // Collision-free subdir (basename + full-path hash), symmetric with
-                // restore, so two sources sharing a basename don't cross-contaminate.
+                // Resolve a RELATIVE bind source against the stack dir (as compose
+                // does), so a pre-change backup — which doesn't chdir — reads the
+                // real path instead of one relative to the process CWD.
+                let raw = std::path::Path::new(&target.name);
+                let src = if raw.is_relative() && !target.name.starts_with('~') {
+                    self.stack_dir.join(raw)
+                } else {
+                    raw.to_path_buf()
+                };
+                let src = src.as_path();
+                // Collision-free subdir keyed on the RAW source (symmetric with
+                // restore), so two sources sharing a basename don't collide.
                 let base = yarddog::backup::backup_subdir(&target.name);
                 let dst = std::path::Path::new(dest_dir).join(base);
                 if src.is_file() {

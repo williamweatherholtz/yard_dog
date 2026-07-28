@@ -352,6 +352,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn block_style_nesting_bomb_is_rejected_not_crash() {
+        // yaml_guard's depth cap only counts FLOW brackets, so a block-style bomb
+        // (`- - - - …`, no brackets) passes the guard. This is safe ONLY because
+        // serde_yaml 0.9.34 caps its own recursion and returns Err rather than
+        // overflowing the stack. This test is the canary: if a future serde_yaml
+        // ever removes that cap, this either starts overflowing (aborts the suite)
+        // or returns Ok — both fail the assert and flag that the guard must then
+        // be made block-style-aware.
+        let bomb = "- ".repeat(400_000);
+        let r = serde_yaml::from_str::<serde_yaml::Value>(&bomb);
+        assert!(r.is_err(), "serde_yaml must reject a deep block-nesting bomb (recursion cap)");
+    }
+
+    #[test]
     fn compose_dollar_escape_is_literal() {
         let env = HashMap::new();
         // `$$` is a compose-escaped literal `$`; `$${VAR}` must NOT interpolate.

@@ -123,24 +123,59 @@ pub fn host_is_public(host: &str) -> bool {
         return false;
     }
     if let Ok(ip) = hostname.parse::<std::net::IpAddr>() {
-        if ip.is_loopback() || ip.is_unspecified() {
-            return false;
+        return ip_is_public(ip);
+    }
+    // A DNS name: resolve it and require EVERY resolved address to be public — a
+    // public-looking name whose A/AAAA record points at 169.254.169.254 / 10.x /
+    // loopback is a classic SSRF vector, and checking only the string misses it. A
+    // name that won't resolve can't be safely dialed, so reject (the digest fetch
+    // is best-effort). Residual: a rebind between this check and ureq's own connect
+    // is not closed here (would require pinning the resolved IP).
+    use std::net::ToSocketAddrs;
+    match (hostname, 443u16).to_socket_addrs() {
+        Ok(addrs) => {
+            let mut resolved_any = false;
+            for sa in addrs {
+                resolved_any = true;
+                if !ip_is_public(sa.ip()) {
+                    return false;
+                }
+            }
+            resolved_any
         }
-        match ip {
-            std::net::IpAddr::V4(v4) => {
-                if v4.is_private() || v4.is_link_local() {
-                    return false; // 10/8, 172.16/12, 192.168/16, 169.254/16
-                }
+        Err(_) => false,
+    }
+}
+
+/// Whether an IP address is a public (non-loopback/private/link-local/ULA/CGNAT)
+/// address safe to dial. IPv4-mapped IPv6 (`::ffff:a.b.c.d`) is unmapped and
+/// re-checked so it can't smuggle a private v4 past the v6 branch.
+fn ip_is_public(ip: std::net::IpAddr) -> bool {
+    if ip.is_loopback() || ip.is_unspecified() {
+        return false;
+    }
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            if v4.is_private() || v4.is_link_local() {
+                return false; // 10/8, 172.16/12, 192.168/16, 169.254/16
             }
-            std::net::IpAddr::V6(v6) => {
-                let seg0 = v6.segments()[0];
-                if (seg0 & 0xfe00) == 0xfc00 || (seg0 & 0xffc0) == 0xfe80 {
-                    return false; // ULA fc00::/7, link-local fe80::/10
-                }
+            let o = v4.octets();
+            if o[0] == 100 && (o[1] & 0xc0) == 0x40 {
+                return false; // CGNAT 100.64.0.0/10
             }
+            true
+        }
+        std::net::IpAddr::V6(v6) => {
+            if let Some(m) = v6.to_ipv4_mapped() {
+                return ip_is_public(std::net::IpAddr::V4(m));
+            }
+            let seg0 = v6.segments()[0];
+            if (seg0 & 0xfe00) == 0xfc00 || (seg0 & 0xffc0) == 0xfe80 {
+                return false; // ULA fc00::/7, link-local fe80::/10
+            }
+            true
         }
     }
-    true
 }
 
 impl HttpRegistryClient {
@@ -215,6 +250,23 @@ mod tests {
     // Live network test (opt-in): proves the Docker Hub AND GHCR token+manifest
     // flow returns a real digest. Run with:
     //   cargo test --lib -- --ignored registry::tests::remote_digest_live
+    #[test]
+    fn ssrf_guard_rejects_internal_ip_literals() {
+        // literal internal addresses (parse branch, no DNS) are rejected
+        for h in [
+            "127.0.0.1", "10.0.0.5", "172.16.0.1", "192.168.1.1", "169.254.169.254",
+            "0.0.0.0", "100.64.0.1", "[::1]", "[fc00::1]", "[fe80::1]",
+            "[::ffff:127.0.0.1]", "[::ffff:169.254.169.254]", "[::ffff:10.0.0.1]",
+            "localhost", "foo.localhost", "registry.localhost:5000",
+        ] {
+            assert!(!host_is_public(h), "must reject internal host {h}");
+        }
+        // genuine public literals pass
+        for h in ["1.1.1.1", "8.8.8.8", "[2606:4700:4700::1111]"] {
+            assert!(host_is_public(h), "must allow public host {h}");
+        }
+    }
+
     #[test]
     #[ignore = "requires network"]
     fn remote_digest_live_resolves_dockerhub_and_ghcr() {

@@ -28,11 +28,17 @@ pub fn parse_services(yaml: &str) -> Vec<ServiceView> {
     for (name, svc) in services {
         // A *data* mount (writable volume) keys the cautious update path. A
         // read-only mount (e.g. a config file `:ro`) is not data, so it does not.
-        let has_persistent_mount = svc
+        let has_volume = svc
             .get("volumes")
             .and_then(|v| v.as_sequence())
             .map(|seq| seq.iter().any(is_data_volume))
             .unwrap_or(false);
+        // `volumes_from` inherits another container's data mounts, so a service
+        // using it is also data-bearing (and must not be auto-updated blindly).
+        let uses_volumes_from = svc.get("volumes_from").map_or(false, |v| {
+            v.as_sequence().map_or(false, |s| !s.is_empty()) || v.as_str().is_some()
+        });
+        let has_persistent_mount = has_volume || uses_volumes_from;
         out.push(ServiceView {
             name: name.as_str().unwrap_or_default().to_string(),
             image: svc.get("image").and_then(|v| v.as_str()).map(String::from),

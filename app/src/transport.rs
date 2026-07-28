@@ -13,9 +13,16 @@ pub trait Transport {
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
-        if entry.file_type()?.is_dir() {
+        let ft = entry.file_type()?;
+        // Skip symlinks: following one to a directory would abort the whole sync,
+        // and reading one as a file would ship the target's (possibly out-of-tree)
+        // contents. Only mirror real dirs + regular files.
+        if ft.is_symlink() {
+            continue;
+        }
+        if ft.is_dir() {
             walk(&entry.path(), out)?;
-        } else {
+        } else if ft.is_file() {
             out.push(entry.path());
         }
     }

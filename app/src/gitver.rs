@@ -18,6 +18,7 @@ const GITIGNORE: &str = "# Yard Dog: never version data or secrets\n\
 .yd-backups/\n\
 .yd-backups.partial-*\n\
 .yd-backups.old-*\n\
+.yd-pins.*.tmp\n\
 .yd-git.lock\n\
 .env\n\
 *.env\n\
