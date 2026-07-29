@@ -244,6 +244,24 @@ pub fn default_backup_dest(stack_dir: &std::path::Path) -> std::path::PathBuf {
     stack_dir.join(".yd-backups")
 }
 
+/// Where a stack's automatic backups go. With a configured `backup_root` (an
+/// operator setting — e.g. a mounted NAS volume), each stack's recovery points
+/// live under `<backup_root>/<stack-name>`, so backups can land off the data's own
+/// disk. Unset (or empty) ⇒ the git-excluded stack-local default. The stack name is
+/// the stack dir's basename (unique when stacks live under one root).
+pub fn resolve_backup_dest(stack_dir: &std::path::Path, backup_root: Option<&std::path::Path>) -> std::path::PathBuf {
+    match backup_root.filter(|r| !r.as_os_str().is_empty()) {
+        Some(root) => {
+            let name = stack_dir
+                .file_name()
+                .map(|n| n.to_owned())
+                .unwrap_or_else(|| std::ffi::OsString::from("stack"));
+            root.join(name)
+        }
+        None => default_backup_dest(stack_dir),
+    }
+}
+
 /// Build and execute a backup of a whole stack in one call.
 #[allow(clippy::too_many_arguments)]
 pub fn backup_stack(
@@ -706,6 +724,23 @@ mod tests {
     fn default_backup_dest_is_a_gitignored_subdir() {
         let d = default_backup_dest(std::path::Path::new("/srv/immich"));
         assert!(d.ends_with(".yd-backups"), "got {d:?}");
+    }
+
+    #[test]
+    fn resolve_backup_dest_honors_a_configured_root() {
+        let stack = std::path::Path::new("/srv/stacks/immich");
+        // configured root ⇒ <root>/<stack-name>, off the stack's own disk
+        assert_eq!(
+            resolve_backup_dest(stack, Some(std::path::Path::new("/mnt/nas"))),
+            std::path::PathBuf::from("/mnt/nas/immich")
+        );
+        // unset ⇒ stack-local default
+        assert_eq!(resolve_backup_dest(stack, None), default_backup_dest(stack));
+        // empty ⇒ treated as unset
+        assert_eq!(
+            resolve_backup_dest(stack, Some(std::path::Path::new(""))),
+            default_backup_dest(stack)
+        );
     }
 
     #[test]

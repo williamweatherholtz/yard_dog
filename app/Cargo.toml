@@ -16,7 +16,7 @@ path = "src/main.rs"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 bollard = "0.17"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 sha2 = "0.10"

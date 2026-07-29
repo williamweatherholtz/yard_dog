@@ -482,6 +482,14 @@ async function showDiff(from,to){const pre=$("#diffout");pre.innerHTML="Loading�
 // ---- Backups ----
 async function renderBackups(){const b=$("#tabbody");
   const bar=el("div","bar");const bk=el("button","btn primary","Back up now");bk.onclick=()=>confirmAct("Back up now? Copies run against the LIVE stack — NOT point-in-time consistent. Stop the stack first for a guaranteed-consistent backup.","/api/backup",{compose:current},"backup").then(ok=>{if(ok)renderShell();});bar.append(bk);b.append(bar);
+  // Show where recovery points are written (operator BACKUP_ROOT config).
+  try{
+    const {data:cfg}=await api("/api/config");
+    const root=((cfg&&cfg.backup_root)||"").trim().replace(/\/+$/,"");
+    const stack=(current||"").split("/").slice(0,-1).pop()||"stack";
+    const dest=root?root+"/"+stack:"the stack's own ./.yd-backups";
+    b.append(el("p","muted","Recovery points → "+dest+(root?"  (off the data's disk)":"  (same disk as the data — set BACKUP_ROOT to store them elsewhere)")));
+  }catch(e){}
   const {data}=await api("/api/backups?compose="+enc(current));const items=data.items||[];
   if(!items.length){b.append(el("p","muted","No recovery points yet — take a backup to create one."));return;}
   const tbl=el("table");const hr=el("tr");["Recovery point","Files","Integrity",""].forEach(h=>hr.append(el("th",null,h)));tbl.append(hr);

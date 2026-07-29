@@ -51,6 +51,10 @@ services:
       ROOT: ${ROOT:-/srv/stacks}
       PORT: ${PORT:-8770}
       BIND: 0.0.0.0                  # container-internal; published to loopback below
+      # Where recovery points live. Empty ⇒ each stack's own .yd-backups (same disk
+      # as the data). Point it at a MOUNTED volume (see the commented mount below)
+      # to keep backups OFF the data's disk: <BACKUP_ROOT>/<stack-name>.
+      BACKUP_ROOT: ${BACKUP_ROOT:-}
     ports:
       # SECURITY: keep the "127.0.0.1:" prefix — it is the ONLY access boundary for
       # this no-auth, socket-wired control plane. (The built-in Host allowlist is a
@@ -63,6 +67,10 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       # 2) your stacks dir, mounted at the SAME path so host bind paths resolve
       - ${ROOT:-/srv/stacks}:${ROOT:-/srv/stacks}
+      # 3) OPTIONAL: a backup volume mounted at the SAME path as BACKUP_ROOT above,
+      #    so recovery points land off the data's disk. Uncomment + set BACKUP_ROOT
+      #    to match (e.g. BACKUP_ROOT=/mnt/nas/yd-backups):
+      # - ${BACKUP_ROOT}:${BACKUP_ROOT}
 
     # ---- optional hardening (opt in AFTER testing on your host) ----------------
     # Cap memory so a runaway can't starve the host. yd is a lightweight Rust

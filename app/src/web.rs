@@ -640,7 +640,7 @@ fn field<'a>(v: &'a serde_json::Value, k: &str) -> Option<&'a str> {
 }
 
 /// Dispatch a POST action. Returns (status, json body).
-fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
+fn handle_action(root: &Path, backup_root: Option<&Path>, path: &str, body: &str) -> (u16, String) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
         return (400, "{\"error\":\"invalid json\"}".into());
     };
@@ -652,7 +652,12 @@ fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
         "/api/deploy" => {
             let Some(rel) = field(&v, "compose") else { return bad("compose required") };
             let Some(abs) = compose_abs(rel) else { return bad("path outside root") };
-            (200, run_tool(&yd, &["deploy".into(), abs, "--yes".into()]))
+            let mut args = vec!["deploy".to_string(), abs, "--yes".into()];
+            if let Some(br) = backup_root {
+                args.push("--backup-root".into());
+                args.push(br.to_string_lossy().to_string());
+            }
+            (200, run_tool(&yd, &args))
         }
         "/api/down" => {
             let Some(rel) = field(&v, "compose") else { return bad("compose required") };
@@ -672,7 +677,12 @@ fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
             };
             let Some(abs) = compose_abs(rel) else { return bad("path outside root") };
             let repo = Path::new(&abs).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or(abs.clone());
-            (200, run_tool(&yd, &["upgrade".into(), abs, "--repo".into(), repo, "--service".into(), service.into(), "--image".into(), image.into(), "--yes".into()]))
+            let mut args = vec!["upgrade".to_string(), abs, "--repo".into(), repo, "--service".into(), service.into(), "--image".into(), image.into(), "--yes".into()];
+            if let Some(br) = backup_root {
+                args.push("--backup-root".into());
+                args.push(br.to_string_lossy().to_string());
+            }
+            (200, run_tool(&yd, &args))
         }
         "/api/lifecycle" => {
             let (Some(rel), Some(event)) = (field(&v, "compose"), field(&v, "event")) else {
@@ -687,12 +697,21 @@ fn handle_action(root: &Path, path: &str, body: &str) -> (u16, String) {
         }
         "/api/backup" => {
             let Some(rel) = field(&v, "compose") else { return bad("compose required") };
-            let dest = field(&v, "dest").unwrap_or(".yd-backups");
-            if safe_join(root, dest).is_none() {
-                return bad("dest outside root");
-            }
             let Some(abs) = compose_abs(rel) else { return bad("path outside root") };
-            (200, run_tool(&yd, &["backup".into(), abs, "--run".into(), "--dest".into(), dest.into()]))
+            let dest_str: String = if let Some(br) = backup_root {
+                // Operator-configured root (trusted; may sit outside the served root):
+                // <backup-root>/<stack-name>.
+                let stack_dir = Path::new(&abs).parent().unwrap_or(root);
+                crate::backup::resolve_backup_dest(stack_dir, Some(br)).to_string_lossy().to_string()
+            } else {
+                // No operator root: honor the client `dest`, confined under the root.
+                let dest = field(&v, "dest").unwrap_or(".yd-backups");
+                if safe_join(root, dest).is_none() {
+                    return bad("dest outside root");
+                }
+                dest.to_string()
+            };
+            (200, run_tool(&yd, &["backup".into(), abs, "--run".into(), "--dest".into(), dest_str]))
         }
         // Live validation for the editor: guardrails + preflight over posted YAML,
         // no write. Lifecycle is treated as Draft (the gate is not about the text).
@@ -934,8 +953,11 @@ fn json_response(status: u16, body: String) -> Response<io::Cursor<Vec<u8>>> {
 }
 
 /// Start the loopback control-plane server. Never binds anything but 127.0.0.1.
-pub fn serve(host: &str, port: u16, root: &Path) -> io::Result<()> {
+pub fn serve(host: &str, port: u16, root: &Path, backup_root: Option<&Path>) -> io::Result<()> {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    // Operator-configured recovery-point root (trusted; may sit OUTSIDE the served
+    // stacks root, e.g. a mounted NAS). Shared read-only with each request thread.
+    let backup_root: Option<PathBuf> = backup_root.map(|p| p.to_path_buf());
     // The served root IS the monorepo (decGitVersioning): one repo, per-stack
     // snapshots scoped by path. Initialise it once on startup, with an initial
     // commit so remote sync (push) works immediately.
@@ -960,6 +982,7 @@ pub fn serve(host: &str, port: u16, root: &Path) -> io::Result<()> {
         // terminal read parks up to 500ms) never stalls the rest of the control
         // plane. A panic in one handler kills only its thread, not the server.
         let root = root.clone();
+        let backup_root = backup_root.clone();
         // Backpressure: refuse past the in-flight cap rather than spawn unboundedly.
         if INFLIGHT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= MAX_INFLIGHT {
             INFLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
@@ -990,6 +1013,11 @@ pub fn serve(host: &str, port: u16, root: &Path) -> io::Result<()> {
             (Method::Get, "/") | (Method::Get, "/index.html") => Response::from_string(UI_HTML)
                 .with_header(header("Content-Type", "text/html; charset=utf-8")),
             (Method::Get, "/api/stacks") => json_response(200, stacks_json(&root)),
+            // Read-only config the UI reflects (e.g. where "Back up now" writes).
+            (Method::Get, "/api/config") => json_response(200, format!(
+                "{{\"backup_root\":{}}}",
+                json_escape(&backup_root.as_deref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default())
+            )),
             (Method::Get, "/api/stack") => {
                 match query_param(&query, "compose").and_then(|rel| stack_detail_json(&root, &rel)) {
                     Some(body) => json_response(200, body),
@@ -1090,16 +1118,16 @@ pub fn serve(host: &str, port: u16, root: &Path) -> io::Result<()> {
                     // (it must not block on a long deploy) and reads are GET.
                     let (status, json) = if p.starts_with("/api/term/") {
                         // terminal I/O must stay concurrent (never block on a deploy)
-                        handle_action(&root, p, &body)
+                        handle_action(&root, backup_root.as_deref(), p, &body)
                     } else if p.starts_with("/api/git/") || p.starts_with("/api/fleet/") {
                         let _g = global_lock().lock().unwrap_or_else(|e| e.into_inner());
-                        handle_action(&root, p, &body)
+                        handle_action(&root, backup_root.as_deref(), p, &body)
                     } else {
                         // stack-scoped: serialize per stack so a long deploy of one
                         // stack no longer blocks mutations to others.
                         let lock = stack_lock(&stack_key(&body));
                         let _g = lock.lock().unwrap_or_else(|e| e.into_inner());
-                        handle_action(&root, p, &body)
+                        handle_action(&root, backup_root.as_deref(), p, &body)
                     };
                     json_response(status, json)
                 }
@@ -1257,9 +1285,9 @@ mod tests {
     #[test]
     fn actions_reject_paths_outside_root() {
         let root = Path::new("/srv/stacks");
-        let (status, _) = handle_action(root, "/api/deploy", "{\"compose\":\"../../etc/x.yml\"}");
+        let (status, _) = handle_action(root, None, "/api/deploy", "{\"compose\":\"../../etc/x.yml\"}");
         assert_eq!(status, 400);
-        let (status, _) = handle_action(root, "/api/lifecycle", "{\"compose\":\"a.yml\",\"event\":\"boom\"}");
+        let (status, _) = handle_action(root, None, "/api/lifecycle", "{\"compose\":\"a.yml\",\"event\":\"boom\"}");
         assert_eq!(status, 400, "invalid event rejected");
     }
 }

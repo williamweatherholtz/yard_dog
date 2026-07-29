@@ -505,6 +505,31 @@ fn backup_then_restore_round_trip_recovers_bind_data() {
 }
 
 #[test]
+fn fleet_backup_honors_backup_root() {
+    // With --backup-root, recovery points land under <root>/<stack>, off the data's
+    // own disk — not the stack-local .yd-backups.
+    let root = tempfile::tempdir().unwrap();
+    let stacks = root.path().join("stacks");
+    let nas = root.path().join("nas");
+    std::fs::create_dir_all(stacks.join("web").join("html")).unwrap();
+    std::fs::write(stacks.join("web").join("html").join("index.html"), b"hi").unwrap();
+    std::fs::write(
+        stacks.join("web").join("docker-compose.yml"),
+        "services:\n  web:\n    image: nginx:1.27\n    volumes:\n      - ./html:/usr/share/nginx/html\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("yd")
+        .unwrap()
+        .args(["fleet", "backup", "--root", stacks.to_str().unwrap(), "--backup-root", nas.to_str().unwrap()])
+        .assert()
+        .success();
+
+    assert!(nas.join("web").join("manifest.json").exists(), "backup under <backup-root>/<stack>");
+    assert!(!stacks.join("web").join(".yd-backups").exists(), "must NOT use the stack-local default");
+}
+
+#[test]
 fn self_update_prints_current_version() {
     // Offline-safe: self-update reports "yd <version>: <status>" whether or not
     // the release host is reachable, so assert on the compiled-in version.

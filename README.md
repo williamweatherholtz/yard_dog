@@ -82,6 +82,12 @@ Run `yd <command> --help` for full flags. Grouped by what they touch:
 | `yd push --from <dir> --to <target>` | Mirror a backup directory to a destination. |
 | `yd prune --dest <dir> --keep <N>` | Prune old backup snapshots, keeping the newest N. |
 
+**Where automatic backups go.** The pre-change recovery point (and the UI's "Back up
+now") default to each stack's own `.yd-backups` — *same disk as the data*. Set
+**`BACKUP_ROOT`** (env for `yd serve`, or `--backup-root` on `deploy`/`upgrade`/`fleet
+backup`) to store them under `<BACKUP_ROOT>/<stack-name>` instead — e.g. a mounted NAS
+volume, keeping recovery points off the data's disk. Empty/unset ⇒ the local default.
+
 ### Versioning
 | Command | Purpose |
 |---|---|

@@ -70,6 +70,11 @@ enum Command {
         /// gives up (distinguishes a slow start from a genuinely unhealthy stack).
         #[arg(long)]
         wait_timeout: Option<u64>,
+        /// Root dir for recovery points: the pre-change backup lands in
+        /// <backup-root>/<stack-name> (e.g. a mounted NAS). Empty/unset ⇒ the
+        /// stack-local .yd-backups.
+        #[arg(long)]
+        backup_root: Option<String>,
     },
     /// Safely upgrade a service's image: back up, snapshot, deploy, regress-or-accept.
     Upgrade {
@@ -90,6 +95,9 @@ enum Command {
         /// Seconds to wait for containers to become healthy before giving up.
         #[arg(long)]
         wait_timeout: Option<u64>,
+        /// Root dir for recovery points (see `deploy --backup-root`).
+        #[arg(long)]
+        backup_root: Option<String>,
     },
     /// List the compose stacks discovered under a root directory.
     Stacks {
@@ -199,6 +207,11 @@ enum Command {
         /// allowlist still refuses any non-loopback Host, so this never opens LAN.
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
+        /// Root dir for recovery points: the pre-change / "Back up now" backups land
+        /// in <backup-root>/<stack-name> (e.g. a mounted NAS volume). Empty/unset ⇒
+        /// each stack's local .yd-backups. Also read from $BACKUP_ROOT.
+        #[arg(long, env = "BACKUP_ROOT")]
+        backup_root: Option<String>,
     },
     /// Preflight a stack: one go/no-go verdict from guardrails + lifecycle.
     Doctor {
@@ -264,10 +277,14 @@ enum FleetAction {
         #[arg(long)]
         root: String,
     },
-    /// Back up every stack to its .yd-backups.
+    /// Back up every stack (to each stack's .yd-backups, or under --backup-root).
     Backup {
         #[arg(long)]
         root: String,
+        /// Root dir for recovery points: each stack backs up to
+        /// <backup-root>/<stack-name>. Empty/unset ⇒ each stack's local .yd-backups.
+        #[arg(long)]
+        backup_root: Option<String>,
     },
 }
 
@@ -329,7 +346,7 @@ fn main() {
             run,
             dest,
         } => run_backup(&file, plan, run, dest.as_deref()),
-        Command::Deploy { file, yes, wait_timeout } => run_deploy(&file, yes, wait_timeout),
+        Command::Deploy { file, yes, wait_timeout, backup_root } => run_deploy(&file, yes, wait_timeout, backup_root),
         Command::Upgrade {
             file,
             repo,
@@ -337,7 +354,8 @@ fn main() {
             image,
             yes,
             wait_timeout,
-        } => run_upgrade(&file, &repo, &service, &image, yes, wait_timeout),
+            backup_root,
+        } => run_upgrade(&file, &repo, &service, &image, yes, wait_timeout, backup_root),
         Command::Stacks { root } => run_stacks(&root),
         Command::Import { file, into, name } => run_import(&file, &into, name.as_deref()),
         Command::Notify { message } => run_notify(&message),
@@ -351,8 +369,9 @@ fn main() {
         Command::SelfUpdate { apply } => run_self_update(apply),
         Command::SignRelease { file, key_hex } => run_sign_release(&file, key_hex.as_deref()),
         Command::Restore { file, from, yes } => run_restore(&file, &from, yes),
-        Command::Serve { root, port, host } => {
-            yarddog::web::serve(&host, port, std::path::Path::new(&root)).map_err(|e| e.to_string())
+        Command::Serve { root, port, host, backup_root } => {
+            let br = backup_root.filter(|s| !s.is_empty()).map(std::path::PathBuf::from);
+            yarddog::web::serve(&host, port, std::path::Path::new(&root), br.as_deref()).map_err(|e| e.to_string())
         }
         Command::Doctor { file } => run_doctor(&file),
         Command::New { into, name, service } => run_new(&into, &name, service.as_deref()),
@@ -659,7 +678,7 @@ fn announce_guardrails(compose: &std::path::Path) {
     }
 }
 
-fn run_deploy(file: &str, yes: bool, wait_timeout: Option<u64>) -> Result<(), String> {
+fn run_deploy(file: &str, yes: bool, wait_timeout: Option<u64>, backup_root: Option<String>) -> Result<(), String> {
     let compose = std::path::Path::new(file);
     let stack_dir = compose.parent().unwrap_or_else(|| std::path::Path::new("."));
     // Version at the (mono)repo root: use the enclosing git repo if there is one
@@ -669,7 +688,8 @@ fn run_deploy(file: &str, yes: bool, wait_timeout: Option<u64>) -> Result<(), St
     let root = yarddog::gitver::repo_root(stack_dir).unwrap_or_else(|| stack_dir.to_path_buf());
     yarddog::gitver::ensure_repo(&root).map_err(|e| format!("cannot init versioning repo: {e}"))?;
     announce_guardrails(compose);
-    let outcome = yarddog::deploy::safe_deploy(compose, &root, yes, &RealBackupHook, &RealDeployer { wait_timeout })
+    let hook = RealBackupHook { backup_root: backup_root.filter(|s| !s.is_empty()).map(std::path::PathBuf::from) };
+    let outcome = yarddog::deploy::safe_deploy(compose, &root, yes, &hook, &RealDeployer { wait_timeout })
         .map_err(|e| format!("deploy failed: {e}"))?;
     println!("deploy: {outcome:?}");
     if let yarddog::deploy::DeployOutcome::Deployed { health_unverified } = &outcome {
@@ -706,6 +726,7 @@ fn run_upgrade(
     image: &str,
     yes: bool,
     wait_timeout: Option<u64>,
+    backup_root: Option<String>,
 ) -> Result<(), String> {
     // --yes proceeds and auto-accepts on a passing healthcheck. Version at the
     // enclosing (mono)repo root if one exists, else at the given --repo dir.
@@ -721,7 +742,7 @@ fn run_upgrade(
         image,
         yes,
         yes,
-        &RealBackupHook,
+        &RealBackupHook { backup_root: backup_root.filter(|s| !s.is_empty()).map(std::path::PathBuf::from) },
         &RealDeployer { wait_timeout },
     )
     .map_err(|e| format!("upgrade failed: {e}"))?;
@@ -796,7 +817,9 @@ impl yarddog::deploy::Deployer for RealDeployer {
 
 /// Pre-change backup hook. TODO: wire to `yd backup --run` with a dest policy;
 /// for now it is a logged no-op so the deploy orchestration is usable.
-struct RealBackupHook;
+struct RealBackupHook {
+    backup_root: Option<std::path::PathBuf>,
+}
 impl yarddog::deploy::BackupHook for RealBackupHook {
     fn pre_change_backup(&self, stack_dir: &std::path::Path) -> std::io::Result<()> {
         let Some(compose) = yarddog::stacks::find_compose(stack_dir) else {
@@ -804,7 +827,10 @@ impl yarddog::deploy::BackupHook for RealBackupHook {
         };
         let yaml = std::fs::read_to_string(&compose)?;
         let env: HashMap<String, String> = std::env::vars().collect();
-        let dest = yarddog::backup::default_backup_dest(stack_dir);
+        let dest = yarddog::backup::resolve_backup_dest(stack_dir, self.backup_root.as_deref());
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let volumes = RealVolumeInspector::new();
         let net = RealNetworkProbe;
         let compose_abs = std::fs::canonicalize(&compose).unwrap_or(compose);
@@ -1085,7 +1111,8 @@ fn run_fleet(action: FleetAction) -> Result<(), String> {
                 println!("{:<20} {}", s.name, if p.ready { "READY" } else { "NOT READY" });
             }
         }
-        FleetAction::Backup { root } => {
+        FleetAction::Backup { root, backup_root } => {
+            let br = backup_root.filter(|s| !s.is_empty()).map(std::path::PathBuf::from);
             // Canonicalize every compose path UP FRONT — before the first run_backup
             // changes the process CWD — so later stacks' relative paths don't resolve
             // against a previous stack's directory.
@@ -1098,7 +1125,11 @@ fn run_fleet(action: FleetAction) -> Result<(), String> {
             let mut failures = 0;
             for (name, compose) in abs {
                 print!("{name}: ");
-                match run_backup(&compose.to_string_lossy(), false, true, Some(".yd-backups")) {
+                // Per-stack dest: under <backup-root>/<stack> if configured, else the
+                // stack-local .yd-backups.
+                let stack_dir = compose.parent().unwrap_or_else(|| std::path::Path::new("."));
+                let dest = yarddog::backup::resolve_backup_dest(stack_dir, br.as_deref());
+                match run_backup(&compose.to_string_lossy(), false, true, Some(&dest.to_string_lossy())) {
                     Ok(()) => {}
                     Err(e) => {
                         println!("failed — {e}");

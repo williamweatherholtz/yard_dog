@@ -36,11 +36,14 @@ COPY --from=build /yd /usr/local/bin/yd
 # these to `yd serve` flags; the binary itself takes --root/--port/--host.
 ENV ROOT=/srv/stacks \
     PORT=8770 \
-    BIND=0.0.0.0
+    BIND=0.0.0.0 \
+    BACKUP_ROOT=
 EXPOSE 8770
 
 # Health = the control plane actually answers, not merely "process started".
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD wget -qO- "http://127.0.0.1:${PORT}/" >/dev/null 2>&1 || exit 1
 
+# BACKUP_ROOT is read from the environment by `yd serve` directly (clap env), so no
+# flag bridging is needed — set it via compose/`docker run -e BACKUP_ROOT=…`.
 ENTRYPOINT ["/bin/sh", "-c", "exec yd serve --root \"$ROOT\" --port \"$PORT\" --host \"$BIND\""]
